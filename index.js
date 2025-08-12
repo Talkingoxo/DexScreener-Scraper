@@ -6,10 +6,11 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 
 app.post('/', async (req, res) => {
+  res.status(200).send('ok');
   const { url } = req.body;
   if (url) {
     try {
-      const response = await fetch(url, {
+      await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -17,12 +18,10 @@ app.post('/', async (req, res) => {
         },
         timeout: 30000
       });
-      await response.text();
     } catch (error) {
       console.error('Fetch error:', error);
     }
   }
-  res.status(200).send('ok');
 });
 
 app.get('/', (req, res) => {
