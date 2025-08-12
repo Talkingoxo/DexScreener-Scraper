@@ -9,10 +9,18 @@ app.post('/', async (req, res) => {
   res.status(200).send('ok');
   const { url } = req.body;
   if (url) {
-    await fetch(url, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'}
-    });
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Connection': 'close'
+        },
+        timeout: 30000
+      });
+    } catch (error) {
+      console.error('Fetch error:', error);
+    }
   }
 });
 
@@ -21,5 +29,5 @@ app.get('/', (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`Ping pong service running on port ${port}`);
 });
