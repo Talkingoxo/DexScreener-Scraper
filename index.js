@@ -6,24 +6,20 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 
 app.post('/', async (req, res) => {
-  const { url } = req.body;
   res.status(200).send('ok');
+  const { url } = req.body;
   if (url) {
     try {
-      const response = await fetch(url, {
+      await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Connection': 'close',
-          'User-Agent': 'Render-PingPong/1.0'
+          'Connection': 'close'
         },
-        body: JSON.stringify({}),
-        timeout: 10000
+        timeout: 30000
       });
-      await response.text();
-      console.log('Successfully triggered:', url);
     } catch (error) {
-      console.error('Fetch error to', url, ':', error.message);
+      console.error('Fetch error:', error);
     }
   }
 });
