@@ -5,12 +5,6 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const http = require('http');
-const https = require('https');
-
-const httpAgent = new http.Agent({ keepAlive: false });
-const httpsAgent = new https.Agent({ keepAlive: false });
-
 app.post('/', async (req, res) => {
   const { url } = req.body;
   res.status(200).send('ok');
@@ -24,7 +18,7 @@ app.post('/', async (req, res) => {
         },
         body: JSON.stringify({}),
         timeout: 10000,
-        agent: url.startsWith('https:') ? httpsAgent : httpAgent
+        agent: false
       });
       await response.text();
     } catch (error) {
