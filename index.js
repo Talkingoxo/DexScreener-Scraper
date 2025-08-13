@@ -6,20 +6,25 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 
 app.post('/', async (req, res) => {
-  res.status(200).send('ok');
   const { url } = req.body;
+  res.status(200).send('ok');
   if (url) {
     try {
-      await fetch(url, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Connection': 'close'
+          'Connection': 'close',
+          'Cache-Control': 'no-cache'
         },
-        timeout: 30000
+        body: JSON.stringify({}),
+        timeout: 10000,
+        agent: false
       });
+      await response.text();
+      console.log('Successfully triggered:', url);
     } catch (error) {
-      console.error('Fetch error:', error);
+      console.error('Fetch error to', url, ':', error.message);
     }
   }
 });
