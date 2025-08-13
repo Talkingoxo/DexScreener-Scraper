@@ -14,17 +14,14 @@ app.post('/', async (req, res) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Connection': 'close',
-          'Cache-Control': 'no-cache'
+          'Connection': 'close'
         },
         body: JSON.stringify({}),
-        timeout: 10000,
-        agent: false
+        timeout: 10000
       });
       await response.text();
-      console.log('Successfully triggered:', url);
     } catch (error) {
-      console.error('Fetch error to', url, ':', error.message);
+      console.error('Fetch error:', error);
     }
   }
 });
