@@ -17,8 +17,7 @@ app.post('/', async (req, res) => {
           'Connection': 'close'
         },
         body: JSON.stringify({}),
-        timeout: 10000,
-        agent: false
+        timeout: 10000
       });
       await response.text();
     } catch (error) {
