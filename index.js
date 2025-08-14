@@ -5,10 +5,13 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
+const https = require('https');
+
 app.post('/', async (req, res) => {
   const { url } = req.body;
   res.status(200).send('ok');
   if (url) {
+    const agent = new https.Agent({ keepAlive: false });
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -17,11 +20,14 @@ app.post('/', async (req, res) => {
           'Connection': 'close'
         },
         body: JSON.stringify({}),
-        timeout: 10000
+        timeout: 8000,
+        agent: agent
       });
       await response.text();
+      agent.destroy();
     } catch (error) {
       console.error('Fetch error:', error);
+      agent.destroy();
     }
   }
 });
