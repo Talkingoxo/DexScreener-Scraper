@@ -9,18 +9,13 @@ app.post('/', async (req, res) => {
   res.status(200).send('ok');
   if (url) {
     const match = url.match(/\/(\d+)$/);
-    let count = 1;
-    let targetUrl = url;
-    
-    if (match) {
-      count = parseInt(match[1]);
-      targetUrl = url.replace(/\/\d+$/, '');
-    }
+    const count = match ? parseInt(match[1], 10) : 1;
+    const baseUrl = url.replace(/\/\d+$/, '');
     
     for (let i = 0; i < count; i++) {
       const agent = new https.Agent({ keepAlive: false });
       try {
-        const response = await fetch(targetUrl, {
+        const response = await fetch(baseUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
