@@ -14,23 +14,12 @@ app.post('/', async (req, res) => {
     const baseUrl = url.replace(/\/\d+$/, '');
     
     for (let i = 0; i < count; i++) {
-      const agent = new https.Agent({ keepAlive: false }); 
-      fetch(baseUrl, { 
-        method: 'POST', 
-        headers: { 
-          'Content-Type': 'application/json', 
-          'Connection': 'close' 
-        }, 
-        body: JSON.stringify({ hit: i + 1 }), 
-        timeout: 8000, 
-        agent: agent 
-      })
-      .then(response => response.text())
-      .then(() => agent.destroy())
-      .catch(error => {
-        console.error('Fetch error:', error); 
-        agent.destroy();
-      });
+      fetch(baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hit: i + 1 }),
+        timeout: 5000
+      }).catch(() => {});
     }
   } 
 }); 
