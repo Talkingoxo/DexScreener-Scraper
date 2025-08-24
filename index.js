@@ -8,30 +8,26 @@ const https = require('https');
 app.post('/', async (req, res) => {
   const { url } = req.body;
   res.status(200).send('ok');
+
   if (url) {
     const match = url.match(/\/(\d+)$/);
     const count = match ? parseInt(match[1], 10) : 1;
-    const baseUrl = match ? url.replace(/\/\d+$/, '') : url;
+    const baseUrl = url.replace(/\/\d+$/, '');
 
     for (let i = 0; i < count; i++) {
       const agent = new https.Agent({ keepAlive: false });
-      try {
-        const response = await fetch(baseUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Connection': 'close'
-          },
-          body: JSON.stringify({}),
-          timeout: 8000,
-          agent: agent
-        });
-        await response.text();
-        agent.destroy();
-      } catch (error) {
-        console.error('Fetch error:', error);
-        agent.destroy();
-      }
+      fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Connection': 'close'
+        },
+        body: JSON.stringify({ hit: i + 1 }),
+        timeout: 8000,
+        agent: agent
+      }).then(r => r.text())
+        .finally(() => agent.destroy())
+        .catch(() => {});
     }
   }
 });
