@@ -8,12 +8,11 @@ const https = require('https');
 app.post('/', async (req, res) => {
   const { url } = req.body;
   res.status(200).send('ok');
-  
   if (url) {
     const match = url.match(/\/(\d+)$/);
     const count = match ? parseInt(match[1], 10) : 1;
-    const baseUrl = url.replace(/\/\d+$/, '');
-    
+    const baseUrl = match ? url.replace(/\/\d+$/, '') : url;
+
     for (let i = 0; i < count; i++) {
       const agent = new https.Agent({ keepAlive: false });
       try {
@@ -23,7 +22,7 @@ app.post('/', async (req, res) => {
             'Content-Type': 'application/json',
             'Connection': 'close'
           },
-          body: JSON.stringify({ hit: i + 1 }),
+          body: JSON.stringify({}),
           timeout: 8000,
           agent: agent
         });
