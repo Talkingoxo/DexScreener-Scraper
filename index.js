@@ -43,23 +43,16 @@ app.get('/', async (req, res) => {
     
     for (let i = 0; i < count; i++) {
       const agent = new https.Agent({ keepAlive: false });
-      try {
-        const response = await fetch(baseUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Connection': 'close'
-          },
-          body: JSON.stringify({}),
-          timeout: 8000,
-          agent: agent
-        });
-        await response.text();
-        agent.destroy();
-      } catch (error) {
-        console.error('Fetch error:', error);
-        agent.destroy();
-      }
+      fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Connection': 'close'
+        },
+        body: JSON.stringify({}),
+        timeout: 8000,
+        agent: agent
+      }).then(() => agent.destroy()).catch(() => agent.destroy());
     }
   }
 });
