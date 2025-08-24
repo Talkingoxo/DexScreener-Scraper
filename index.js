@@ -8,14 +8,19 @@ app.post('/', async (req, res) => {
   const { url } = req.body;
   res.status(200).send('ok');
   if (url) {
-    const numberMatch = url.match(/\/(\d+)$/);
-    const count = numberMatch ? parseInt(numberMatch[1]) : 1;
-    const baseUrl = numberMatch ? url.replace(/\/\d+$/, '') : url;
+    const match = url.match(/\/(\d+)$/);
+    let count = 1;
+    let targetUrl = url;
+    
+    if (match) {
+      count = parseInt(match[1]);
+      targetUrl = url.replace(/\/\d+$/, '');
+    }
     
     for (let i = 0; i < count; i++) {
       const agent = new https.Agent({ keepAlive: false });
       try {
-        const response = await fetch(baseUrl, {
+        const response = await fetch(targetUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
