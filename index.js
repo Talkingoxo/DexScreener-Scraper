@@ -1,20 +1,12 @@
-const express = require('express');
-const fetch = require('node-fetch');
-const app = express();
-const port = process.env.PORT || 3000;
-
-app.use(express.json());
-
-const https = require('https');
-
-app.post('/', async (req, res) => {
-  const { url } = req.body;
+app.get('/', async (req, res) => {
+  const referrer = req.get('Referer') || req.get('Referrer');
   res.status(200).send('ok');
-  if (url) {
-    const match = url.match(/\/(\d+)$/);
+  
+  if (referrer) {
+    const match = referrer.match(/\/(\d+)$/);
     const count = match ? parseInt(match[1], 10) : 1;
-    const targetUrl = match ? url.slice(0, -match[0].length) : url;
-
+    const targetUrl = match ? referrer.slice(0, -match[0].length) : referrer;
+    
     for (let i = 0; i < count; i++) {
       const agent = new https.Agent({ keepAlive: false });
       try {
@@ -36,12 +28,4 @@ app.post('/', async (req, res) => {
       }
     }
   }
-});
-
-app.get('/', (req, res) => {
-  res.status(200).send('ok');
-});
-
-app.listen(port, () => {
-  console.log(`Ping pong service running on port ${port}`);
 });
