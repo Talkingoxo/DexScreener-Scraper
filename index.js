@@ -1,8 +1,16 @@
 const express = require('express');
 const fetch = require('node-fetch');
+const https = require('https');
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
+
+const agent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 100,
+  maxFreeSockets: 10,
+  timeout: 10000
+});
 
 app.post('/', (req, res) => {
   const { url } = req.body;
@@ -10,14 +18,12 @@ app.post('/', (req, res) => {
   
   if (url) {
     for (let i = 0; i < 76; i++) {
-      setImmediate(() => {
-        fetch(url, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({}),
-          timeout: 10000
-        }).catch(() => {});
-      });
+      fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+        agent: agent
+      }).catch(() => {});
     }
   }
 });
