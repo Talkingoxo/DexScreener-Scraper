@@ -10,40 +10,53 @@ app.post('/', async (req, res) => {
   res.status(200).send('ok');
   
   if (url) {
-    // Send 76 requests to the URL
-    const requests = [];
-    
-    for (let i = 0; i < 76; i++) {
-      const agent = new https.Agent({ keepAlive: false });
-      
-      const requestPromise = fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Connection': 'close'
-        },
-        body: JSON.stringify({}),
-        timeout: 8000,
-        agent: agent
-      })
-      .then(async (response) => {
-        await response.text();
-        agent.destroy();
-      })
-      .catch((error) => {
-        console.error(`Fetch error for request ${i + 1}:`, error);
-        agent.destroy();
-      });
-      
-      requests.push(requestPromise);
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
     }
     
-    // Wait for all requests to complete
+    // Send 76 requests without keeping references
+    const sendRequest = async (index) => {
+      const agent = new https.Agent({ 
+        keepAlive: false,
+        maxSockets: 1,
+        timeout: 8000
+      });
+      
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Connection': 'close'
+          },
+          body: JSON.stringify({}),
+          timeout: 8000,
+          agent: agent
+        });
+        
+        // Don't store response, just consume and discard
+        await response.text();
+        agent.destroy();
+      } catch (error) {
+        console.error(`Request ${index + 1} error:`, error.message);
+        agent.destroy();
+      }
+    };
+    
+    // Create and execute requests without storing promises
+    const promises = Array.from({ length: 76 }, (_, i) => sendRequest(i));
+    
     try {
-      await Promise.all(requests);
-      console.log('All 76 requests completed');
+      await Promise.all(promises);
     } catch (error) {
-      console.error('Error completing requests:', error);
+      console.error('Batch error:', error.message);
+    }
+    
+    // Clear any remaining references and force cleanup
+    promises.length = 0;
+    if (global.gc) {
+      global.gc();
     }
   }
 });
