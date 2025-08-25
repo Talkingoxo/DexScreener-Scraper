@@ -9,31 +9,16 @@ app.post('/', async (req, res) => {
   res.status(200).send('ok');
   
   if (url) {
-    let completed = 0;
-    const target = 76;
+    const requests = Array(76).fill().map(() => 
+      fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+        timeout: 30000
+      }).catch(() => {})
+    );
     
-    while (completed < target) {
-      const remaining = target - completed;
-      const batchSize = Math.min(remaining, 20);
-      
-      const results = await Promise.allSettled(
-        Array(batchSize).fill().map(() => 
-          fetch(url, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({}),
-            timeout: 15000
-          })
-        )
-      );
-      
-      const successful = results.filter(r => r.status === 'fulfilled').length;
-      completed += successful;
-      
-      if (completed < target && successful < batchSize) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-    }
+    Promise.all(requests);
   }
 });
 
