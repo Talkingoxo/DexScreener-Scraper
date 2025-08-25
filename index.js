@@ -9,7 +9,7 @@ app.post('/', async (req, res) => {
  res.status(200).send('ok');
  
  if (url) {
-   const batchSize = 50;
+   const batchSize = 40;
    for (let i = 0; i < 76; i += batchSize) {
      const batch = [];
      for (let j = 0; j < batchSize && i + j < 76; j++) {
@@ -21,6 +21,9 @@ app.post('/', async (req, res) => {
        }).catch(() => {}));
      }
      await Promise.allSettled(batch);
+     if (i + batchSize < 76) {
+       await new Promise(resolve => setTimeout(resolve, 5));
+     }
    }
  }
 });
