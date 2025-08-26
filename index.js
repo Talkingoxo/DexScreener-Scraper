@@ -6,16 +6,13 @@ app.use(express.json());
 
 app.post('/', (req, res) => {
 const { url } = req.body;
-res.status(200).send('ok');
 if (url) {
 for (let i = 0; i < 76; i++) {
-fetch(url, { 
-method: 'POST', 
-headers: { 'Content-Type': 'application/json' }, 
-body: JSON.stringify({}), 
-timeout: 8000 
-}).catch(() => {});
+fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}), timeout: 8000 }).catch(() => {});
 }
+res.status(200).send('ok');
+} else {
+res.status(400).send('no url');
 }
 });
 
