@@ -18,16 +18,25 @@ app.post('/', (req, res) => {
   client.on('error', () => client.close());
 
   client.once('connect', () => {
+    let finished = 0;
+
     for (let i = 0; i < 76; i++) {
       const stream = client.request({
         ':method': 'POST',
         ':path': u.pathname,
         'content-type': 'application/json'
       });
+
       stream.write('{}');
       stream.end();
+
+      stream.on('close', () => {
+        finished++;
+        if (finished === 76) {
+          client.close(); // ✅ only close after all 76 are done
+        }
+      });
     }
-    client.close(); // ✅ close so no half-dead session remains
   });
 });
 
