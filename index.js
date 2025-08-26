@@ -1,82 +1,62 @@
 const express = require('express');
-const http2 = require('http2');
+const fetch = require('node-fetch');
+const http = require('http');
+const https = require('https');
+
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-const sessions = {};
+// 🛠 Agents tuned: no dead connections kept
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 100,
+  maxFreeSockets: 0,   // important: don't keep dead ones around
+});
 
-app.post('/', (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).send('missing url');
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 100,
+  maxFreeSockets: 0,
+});
 
-  const u = new URL(url);
-  const key = `${u.protocol}//${u.host}`;
-
-  const fire = (session) => {
-    for (let i = 0; i < 76; i++) {
-      try {
-        const stream = session.request({
-          ':method': 'POST',
-          ':path': u.pathname,
-          'content-type': 'application/json',
-        });
-        stream.write(JSON.stringify({}));
-        stream.end();
-
-        stream.on('response', (headers) => {
-          console.log(`Stream ${i + 1} response:`, headers[':status']);
-        });
-        stream.on('error', (err) => {
-          console.log(`Stream ${i + 1} error:`, err.code, err.message);
-        });
-      } catch (err) {
-        console.log(`Stream ${i + 1} creation failed:`, err.message);
-      }
+// helper fetch with retry on ECONNRESET
+async function safeFetch(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    if (err.code === 'ECONNRESET') {
+      console.log('⚠️ ECONNRESET, retrying with fresh agent');
+      // retry with a one-off agent (no keepAlive)
+      const freshAgent = url.startsWith('https://')
+        ? new https.Agent({ keepAlive: false })
+        : new http.Agent({ keepAlive: false });
+      return fetch(url, { ...options, agent: freshAgent });
     }
-  };
-
-  const createSession = () => {
-    console.log('⚡ Creating new session for', key);
-    const session = http2.connect(u.origin);
-
-    sessions[key] = session;
-
-    session.on('error', (err) => {
-      console.log('Session error:', err.code, err.message);
-      delete sessions[key];
-    });
-
-    session.on('close', () => {
-      console.log('Session closed');
-      delete sessions[key];
-    });
-
-    session.once('connect', () => {
-      console.log('✅ Session connected');
-      fire(session);
-    });
-
-    return session;
-  };
-
-  // ✅ Only reuse if session is clearly alive
-  const s = sessions[key];
-  if (
-    !s ||
-    s.destroyed ||
-    s.closed ||
-    !s.socket ||
-    s.socket.destroyed
-  ) {
-    createSession();
-  } else {
-    console.log('♻️ Using existing session');
-    fire(s);
+    throw err;
   }
+}
 
-  res.send('ok');
+app.post('/', async (req, res) => {
+  const { url } = req.body;
+  res.status(200).send('ok');
+
+  if (url) {
+    const agent = url.startsWith('https://') ? httpsAgent : httpAgent;
+    for (let i = 0; i < 76; i++) {
+      safeFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+        agent,
+      }).catch(() => {});
+    }
+  }
+});
+
+app.get('/', (req, res) => {
+  res.status(200).send('ok');
 });
 
 app.listen(port, () => {
