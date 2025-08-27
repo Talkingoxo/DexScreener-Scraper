@@ -1,1 +1,64 @@
-const express=require('express');const http2=require('http2');const app=express();const port=process.env.PORT||3000;app.use(express.json());const sessions={};app.post('/',(req,res)=>{console.log('=== REQUEST START ===',new Date().toISOString());const{url}=req.body;console.log('URL:',url);console.log('Body:',JSON.stringify(req.body));res.status(200).send('ok');if(url){const u=new URL(url);const key=`${u.protocol}//${u.host}`;console.log('Session key:',key);console.log('Sessions keys:',Object.keys(sessions));console.log('Session exists:',!!sessions[key]);if(sessions[key]){console.log('Session state:',{destroyed:sessions[key].destroyed,closed:sessions[key].closed,connecting:sessions[key].connecting,pendingSettingsAck:sessions[key].pendingSettingsAck});console.log('Session socket state:',{readable:sessions[key].socket?.readable,writable:sessions[key].socket?.writable,destroyed:sessions[key].socket?.destroyed});}const fire=()=>{console.log('🔥 FIRE CALLED');console.log('Session before fire:',!!sessions[key]);if(!sessions[key]){console.log('❌ NO SESSION IN FIRE');return;}console.log('Session state in fire:',{destroyed:sessions[key].destroyed,closed:sessions[key].closed});for(let i=0;i<76;i++){try{console.log(`Creating stream ${i+1}`);const stream=sessions[key].request({':method':'POST',':path':u.pathname,'content-type':'application/json'});console.log(`Stream ${i+1} created, ID:`,stream.id);stream.write(JSON.stringify({}));stream.end();stream.on('error',(err)=>{console.log(`Stream ${i+1} error:`,err.code,err.message);});stream.on('response',(headers)=>{console.log(`Stream ${i+1} response:`,headers[':status']);});stream.on('close',()=>{console.log(`Stream ${i+1} closed, rstCode:`,stream.rstCode);});}catch(err){console.log(`Stream ${i+1} creation failed:`,err.message);}}console.log('All 76 streams creation attempted');};if(!sessions[key]||sessions[key].destroyed||sessions[key].closed){console.log('Creating new session');const session=http2.connect(u.origin);console.log('Session created, object:',!!session);sessions[key]=session;session.on('error',(err)=>{console.log('Session error:',err.code,err.message);console.log('Session error stack:',err.stack);delete sessions[key];});session.on('close',()=>{console.log('Session closed');delete sessions[key];});session.on('goaway',(errorCode,lastStreamID,opaqueData)=>{console.log('Session goaway:',errorCode,lastStreamID);});session.on('frameError',(type,code,streamID)=>{console.log('Session frame error:',type,code,streamID);});session.once('connect',()=>{console.log('Session connected event fired');console.log('Session state after connect:',{destroyed:session.destroyed,closed:session.closed,connecting:session.connecting,pendingSettingsAck:session.pendingSettingsAck});console.log('Socket state after connect:',{readable:session.socket?.readable,writable:session.socket?.writable,destroyed:session.socket?.destroyed});fire();});console.log('Waiting for session connect...');}else{console.log('Using existing session');console.log('About to test existing session');try{const testStream=sessions[key].request({':method':'HEAD',':path':'/'});console.log('Test stream created, ID:',testStream.id);let testResolved=false;testStream.on('error',(err)=>{if(testResolved)return;testResolved=true;console.log('Test stream error:',err.code,err.message);console.log('Session is dead, deleting');delete sessions[key];});testStream.on('response',(headers)=>{if(testResolved)return;testResolved=true;console.log('Test stream response:',headers[':status']);console.log('Test passed, firing 76 streams');fire();});testStream.on('close',()=>{console.log('Test stream closed, rstCode:',testStream.rstCode);});testStream.end();setTimeout(()=>{if(!testResolved){testResolved=true;console.log('Test stream timeout, session is dead');delete sessions[key];}},1000);}catch(err){console.log('Test stream creation failed:',err.message);console.log('Session is dead, deleting');delete sessions[key];}}}console.log('=== REQUEST END ===',new Date().toISOString());});app.get('/',(req,res)=>{res.status(200).send('ok');});app.listen(port,()=>{console.log(`Service running on port ${port}`);});
+const express = require('express');
+const fetch = require('node-fetch');
+const http = require('http');
+const https = require('https');
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// 🛠 Agents tuned: no dead connections kept
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 100,
+  maxFreeSockets: 0,   // important: don't keep dead ones around
+});
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 100,
+  maxFreeSockets: 0,
+});
+
+// helper fetch with retry on ECONNRESET
+async function safeFetch(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    if (err.code === 'ECONNRESET') {
+      console.log('⚠️ ECONNRESET, retrying with fresh agent');
+      // retry with a one-off agent (no keepAlive)
+      const freshAgent = url.startsWith('https://')
+        ? new https.Agent({ keepAlive: false })
+        : new http.Agent({ keepAlive: false });
+      return fetch(url, { ...options, agent: freshAgent });
+    }
+    throw err;
+  }
+}
+
+app.post('/', async (req, res) => {
+  const { url } = req.body;
+  res.status(200).send('ok');
+
+  if (url) {
+    const agent = url.startsWith('https://') ? httpsAgent : httpAgent;
+    for (let i = 0; i < 76; i++) {
+      safeFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+        agent,
+      }).catch(() => {});
+    }
+  }
+});
+
+app.get('/', (req, res) => {
+  res.status(200).send('ok');
+});
+
+app.listen(port, () => {
+  console.log(`Service running on port ${port}`);
+});
