@@ -8,9 +8,14 @@ app.post('/', (req, res) => {
   res.status(200).send('ok');
   if (!url) return;
   const u = new URL(url);
+  const path = u.pathname;
+  const lastSlash = path.lastIndexOf('/');
+  const lastPart = path.slice(lastSlash + 1);
+  const count = +lastPart || 1;
+  const targetPath = count === 1 ? path : path.slice(0, lastSlash + 1);
   const session = http2.connect(u.origin);
-  for (let i = 0; i < 76; i++) {
-    const stream = session.request({':method': 'POST', ':path': u.pathname, 'content-type': 'application/json'});
+  for (let i = 0; i < count; i++) {
+    const stream = session.request({':method': 'POST', ':path': targetPath, 'content-type': 'application/json'});
     stream.write(JSON.stringify({}));
     stream.end();
   }
