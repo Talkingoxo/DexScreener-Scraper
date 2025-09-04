@@ -14,11 +14,12 @@ app.post('/', (req, res) => {
   const count = +lastPart || 1;
   const targetPath = count === 1 ? path : path.slice(0, lastSlash + 1);
   const session = http2.connect(u.origin);
+  let completed = 0;
   for (let i = 0; i < count; i++) {
     const stream = session.request({':method': 'POST', ':path': targetPath, 'content-type': 'application/json'});
     stream.write(JSON.stringify({}));
     stream.end();
+    stream.on('close', () => { if (++completed === count) session.destroy(); });
   }
-  setTimeout(() => session.destroy(), 1000);
 });
 app.listen(port, () => console.log(`Service running on port ${port}`));
