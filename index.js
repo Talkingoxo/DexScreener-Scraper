@@ -19,6 +19,6 @@ app.post('/', (req, res) => {
     stream.write(JSON.stringify({}));
     stream.end();
   }
-  session.destroy();
+  setTimeout(() => session.destroy(), 1000);
 });
 app.listen(port, () => console.log(`Service running on port ${port}`));
