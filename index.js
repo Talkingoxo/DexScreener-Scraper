@@ -20,9 +20,9 @@ app.post('/', (req, res) => {
   const lastSlash = path.lastIndexOf('/');
   const lastPart = path.slice(lastSlash + 1);
   console.log(`[${reqId}] Last path part:`, lastPart);
-  const count = +lastPart || 1;
+  const count = isNaN(+lastPart) ? 1 : +lastPart;
   console.log(`[${reqId}] Extracted count:`, count);
-  const targetPath = count === 1 ? path : path.slice(0, lastSlash + 1);
+  const targetPath = isNaN(+lastPart) ? path : path.slice(0, lastSlash + 1);
   console.log(`[${reqId}] Target path:`, targetPath);
   console.log(`[${reqId}] Creating HTTP/2 session to:`, u.origin);
   const session = http2.connect(u.origin);
