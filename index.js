@@ -16,7 +16,10 @@ app.post('/', (req, res) => {
   for (let i = 0; i < count; i++) {
     const country = countries[i % 24];
     const apiUrl = `https://api.scrapingant.com/v2/general?x-api-key=${apiKey}&url=${targetUrl}&proxy_country=${country}&proxy_type=datacenter&browser=false`;
-    const req = https.request(apiUrl, { method: 'POST', headers: { 'content-type': 'application/json' } });
+    const req = https.request(apiUrl, { method: 'POST', headers: { 'content-type': 'application/json' } }, (res) => {
+      console.log(`Request ${i}: ${res.statusCode}`);
+    });
+    req.on('error', (err) => console.log(`Request ${i} failed:`, err.message));
     req.write(`{"worker-id":${i}}`);
     req.end();
   }
