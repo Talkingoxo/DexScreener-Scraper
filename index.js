@@ -14,7 +14,7 @@ app.post('/', (req, res) => {
   const targetUrl = encodeURIComponent(url.slice(0, slashIndex + 1));
   const apiKey = '2a33de63f0054f1cb33f5857a3fe00c5';
   for (let i = 0; i < count; i++) {
-    const country = countries[i % 24];
+    const country = countries[i % countries.length];
     const postData = JSON.stringify({"worker-id": i});
     const options = {
       hostname: 'api.scrapingant.com',
