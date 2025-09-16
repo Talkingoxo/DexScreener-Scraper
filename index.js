@@ -14,7 +14,10 @@ app.post('/', (req, res) => {
   const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
   console.log(`🚀 STARTING: URL=${url}, COUNT=${count}, TARGET=${targetUrl}`);
   let completed = 0;
+  console.log(`⏰ SCHEDULING ${count} requests with 2s intervals`);
   for (let i = 0; i < count; i++) {
+    const delay = i * 2000;
+    console.log(`📅 SCHEDULED REQUEST ${i+1}/${count} for ${delay/1000}s delay`);
     setTimeout(() => {
       const country = countries[i % 24];
       const postData = `{"worker-id":${i}}`;
@@ -25,20 +28,36 @@ app.post('/', (req, res) => {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'Content-Length': postData.length}
       };
-      console.log(`🔄 REQUEST ${i+1}/${count}: Country=${country}`);
+      console.log(`🔄 EXECUTING REQUEST ${i+1}/${count}: Country=${country} at ${new Date().toISOString()}`);
       const req = https.request(options, (res) => {
-        console.log(`📥 RESPONSE ${i+1}: Status=${res.statusCode}`);
-        res.on('data', () => {});
+        console.log(`📥 RESPONSE ${i+1}: Status=${res.statusCode} at ${new Date().toISOString()}`);
+        let responseBody = '';
+        res.on('data', (chunk) => {
+          responseBody += chunk;
+        });
         res.on('end', () => {
           completed++;
-          console.log(`✅ REQUEST ${i+1} COMPLETED. Total: ${completed}/${count}`);
+          console.log(`✅ REQUEST ${i+1} COMPLETED. Total: ${completed}/${count}. Body length: ${responseBody.length}`);
+          if (res.statusCode !== 200) {
+            console.log(`⚠️ NON-200 RESPONSE ${i+1}: ${responseBody.substring(0, 200)}`);
+          }
         });
       });
-      req.on('error', (err) => console.log(`💥 REQUEST ${i+1} ERROR:`, err.message));
+      req.on('error', (err) => {
+        console.log(`💥 REQUEST ${i+1} ERROR at ${new Date().toISOString()}:`, err.message);
+        completed++;
+        console.log(`❌ REQUEST ${i+1} FAILED. Total completed: ${completed}/${count}`);
+      });
+      req.on('timeout', () => {
+        console.log(`⏱️ REQUEST ${i+1} TIMEOUT at ${new Date().toISOString()}`);
+        req.abort();
+      });
+      req.setTimeout(30000);
       req.write(postData);
       req.end();
-    }, i * 2000);
+      console.log(`📤 REQUEST ${i+1} SENT`);
+    }, delay);
   }
-  console.log(`🎯 SCHEDULED: ${count} requests with 2s delays`);
+  console.log(`🎯 ALL ${count} REQUESTS SCHEDULED SUCCESSFULLY`);
 });
 app.listen(port, () => console.log(`Service running on port ${port}`));
