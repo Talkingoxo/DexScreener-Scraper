@@ -43,7 +43,7 @@ app.post('/', (req, res) => {
       req.on('error', (err) => console.log(`REQUEST ${i+1} ERROR:`, err.message));
       req.write(postData);
       req.end();
-    }, i * 4000);
+    }, i * 5000);
   }
   console.log(`LOOP COMPLETED: Created ${count} requests with ${agents.length} agents`);
 });
