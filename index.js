@@ -12,11 +12,11 @@ app.post('/', (req, res) => {
   const count = +lastPart || 1;
   const targetUrl = url.slice(0, slashIndex + 1);
   const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
-  console.log(`🚀 STARTING: URL=${url}, COUNT=${count}, TARGET=${targetUrl}`);
+  console.log(`STARTING: URL=${url}, COUNT=${count}, TARGET=${targetUrl}`);
   let completed = 0;
   for (let i = 0; i < count; i++) {
     setTimeout(() => {
-      const country = countries[i % 24];
+      const country = countries[i % 23];
       const postData = `{"worker-id":${i}}`;
       const options = {
         hostname: 'api.scrapingant.com',
@@ -25,20 +25,20 @@ app.post('/', (req, res) => {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'Content-Length': postData.length}
       };
-      console.log(`🔄 REQUEST ${i+1}/${count}: Country=${country}`);
+      console.log(`REQUEST ${i+1}/${count}: Country=${country}`);
       const req = https.request(options, (res) => {
-        console.log(`📥 RESPONSE ${i+1}: Status=${res.statusCode}`);
+        console.log(`RESPONSE ${i+1}: Status=${res.statusCode}`);
         res.on('data', () => {});
         res.on('end', () => {
           completed++;
-          console.log(`✅ REQUEST ${i+1} COMPLETED. Total: ${completed}/${count}`);
+          console.log(`REQUEST ${i+1} COMPLETED. Total: ${completed}/${count}`);
         });
       });
-      req.on('error', (err) => console.log(`💥 REQUEST ${i+1} ERROR:`, err.message));
+      req.on('error', (err) => console.log(`REQUEST ${i+1} ERROR:`, err.message));
       req.write(postData);
       req.end();
-    }, i * 2000);
+    }, i * 3000);
   }
-  console.log(`🎯 LOOP COMPLETED: Created ${count} requests`);
+  console.log(`LOOP COMPLETED: Created ${count} requests`);
 });
 app.listen(port, () => console.log(`Service running on port ${port}`));
