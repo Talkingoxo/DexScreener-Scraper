@@ -80,7 +80,7 @@ class KeyManager {
         if (task.retries < 3) {
           this.globalQueue.unshift(task);
         } else {
-          task.callback(500);
+          task.callback(500, true);
         }
         
         this.workers[key].busy = false;
@@ -101,7 +101,7 @@ class KeyManager {
         clearTimeout(timeout);
         console.log(`COMPLETED ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
         this.inFlight.delete(task.id);
-        task.callback(status);
+        task.callback(status, true);
         this.workers[key].busy = false;
         this.processNext();
       }
@@ -113,7 +113,7 @@ class KeyManager {
         clearTimeout(timeout);
         console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`);
         this.inFlight.delete(task.id);
-        task.callback(500);
+        task.callback(500, true);
         this.workers[key].busy = false;
         this.processNext();
       }
@@ -149,17 +149,19 @@ app.post('/', (req, res) => {
     manager.add({
       id: i,
       url: targetUrl,
-      callback: (status) => {
-        completed++;
-        if (status >= 200 && status < 300) success++;
-        
-        if (completed === count) {
-          const duration = ((Date.now() - start) / 1000).toFixed(1);
-          const rate = (success / count * 100).toFixed(1);
-          console.log(`FINISHED: ${success}/${count} success (${rate}%) in ${duration}s`);
+      callback: (status, isFinal) => {
+        if (isFinal) {
+          completed++;
+          if (status >= 200 && status < 300) success++;
           
-          manager.destroy();
-          manager = new KeyManager();
+          if (completed === count) {
+            const duration = ((Date.now() - start) / 1000).toFixed(1);
+            const rate = (success / count * 100).toFixed(1);
+            console.log(`FINISHED: ${success}/${count} success (${rate}%) in ${duration}s`);
+            
+            manager.destroy();
+            manager = new KeyManager();
+          }
         }
       }
     });
