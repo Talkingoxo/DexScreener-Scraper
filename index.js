@@ -1,5 +1,6 @@
 const express = require('express');
 const https = require('https');
+const http2 = require('http2');
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
@@ -18,14 +19,56 @@ const apiKeys = [
 ];
 const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
 
-class APIKeyManager {
+class OptimizedAPIManager {
   constructor() {
     this.keyQueues = {};
     this.keyInFlight = {};
+    this.http2Session = null;
+    this.httpsAgent = null;
+    this.useHTTP2 = false;
+    this.initializeConnections();
     
     apiKeys.forEach(key => {
       this.keyQueues[key] = [];
       this.keyInFlight[key] = false;
+    });
+  }
+  
+  async initializeConnections() {
+    try {
+      console.log('Testing HTTP/2 support for api.scrapingant.com...');
+      this.http2Session = http2.connect('https://api.scrapingant.com');
+      
+      this.http2Session.on('connect', () => {
+        console.log('HTTP/2 connection established');
+        this.useHTTP2 = true;
+      });
+      
+      this.http2Session.on('error', (err) => {
+        console.log('HTTP/2 failed, falling back to HTTPS:', err.message);
+        this.useHTTP2 = false;
+        this.setupHTTPSAgent();
+      });
+      
+      setTimeout(() => {
+        if (!this.useHTTP2) {
+          console.log('HTTP/2 timeout, using HTTPS with keep-alive');
+          this.setupHTTPSAgent();
+        }
+      }, 2000);
+      
+    } catch (err) {
+      console.log('HTTP/2 not supported, using HTTPS:', err.message);
+      this.setupHTTPSAgent();
+    }
+  }
+  
+  setupHTTPSAgent() {
+    this.httpsAgent = new https.Agent({
+      keepAlive: true,
+      keepAliveMsecs: 30000,
+      maxSockets: 50,
+      maxFreeSockets: 10
     });
   }
   
@@ -45,7 +88,7 @@ class APIKeyManager {
     
     this.executeRequest(key, requestData, () => {
       this.keyInFlight[key] = false;
-      setTimeout(() => this.processQueue(key), 100);
+      this.processQueue(key);
     });
   }
   
@@ -54,39 +97,128 @@ class APIKeyManager {
     const country = countries[requestId % 23];
     const postData = `{"worker-id":${requestId}}`;
     
+    if (this.useHTTP2 && this.http2Session) {
+      this.executeHTTP2Request(apiKey, requestData, onComplete);
+    } else {
+      this.executeHTTPSRequest(apiKey, requestData, onComplete);
+    }
+  }
+  
+  executeHTTP2Request(apiKey, requestData, onComplete) {
+    const { targetUrl, requestId } = requestData;
+    const country = countries[requestId % 23];
+    const postData = `{"worker-id":${requestId}}`;
+    
+    console.log(`HTTP/2 REQUEST ${requestId}: Key=${apiKey.slice(-8)}, Country=${country}`);
+    
+    const stream = this.http2Session.request({
+      ':method': 'POST',
+      ':path': `/v2/general?url=${encodeURIComponent(targetUrl)}&x-api-key=${apiKey}&proxy_country=${country}&proxy_type=datacenter&browser=false`,
+      'content-type': 'application/json',
+      'content-length': postData.length
+    }, { timeout: 10000 });
+    
+    let statusCode = null;
+    
+    stream.on('response', (headers) => {
+      statusCode = headers[':status'];
+      console.log(`HTTP/2 RESPONSE ${requestId}: Status=${statusCode}, Key=${apiKey.slice(-8)}`);
+    });
+    
+    stream.on('data', () => {});
+    
+    stream.on('end', () => {
+      console.log(`HTTP/2 COMPLETED ${requestId}: Status=${statusCode}, Key=${apiKey.slice(-8)}`);
+      
+      if (statusCode >= 500) {
+        this.retryRequest(apiKey, requestData, onComplete, 1);
+      } else {
+        requestData.onResponse(statusCode);
+        onComplete();
+      }
+    });
+    
+    stream.on('error', (err) => {
+      console.log(`HTTP/2 ERROR ${requestId}: ${err.message}, Key=${apiKey.slice(-8)}`);
+      this.retryRequest(apiKey, requestData, onComplete, 1);
+    });
+    
+    stream.on('timeout', () => {
+      console.log(`HTTP/2 TIMEOUT ${requestId}: Key=${apiKey.slice(-8)}`);
+      stream.destroy();
+      this.retryRequest(apiKey, requestData, onComplete, 1);
+    });
+    
+    stream.write(postData);
+    stream.end();
+  }
+  
+  executeHTTPSRequest(apiKey, requestData, onComplete) {
+    const { targetUrl, requestId } = requestData;
+    const country = countries[requestId % 23];
+    const postData = `{"worker-id":${requestId}}`;
+    
     const options = {
       hostname: 'api.scrapingant.com',
       port: 443,
       path: `/v2/general?url=${encodeURIComponent(targetUrl)}&x-api-key=${apiKey}&proxy_country=${country}&proxy_type=datacenter&browser=false`,
       method: 'POST',
-      headers: {'Content-Type': 'application/json', 'Content-Length': postData.length}
+      headers: {'Content-Type': 'application/json', 'Content-Length': postData.length},
+      agent: this.httpsAgent,
+      timeout: 10000
     };
     
-    console.log(`REQUEST ${requestId}: Key=${apiKey.slice(-8)}, Country=${country}`);
+    console.log(`HTTPS REQUEST ${requestId}: Key=${apiKey.slice(-8)}, Country=${country}`);
     
     const req = https.request(options, (res) => {
-      console.log(`RESPONSE ${requestId}: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
+      console.log(`HTTPS RESPONSE ${requestId}: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
       
       res.on('data', () => {});
       res.on('end', () => {
-        console.log(`REQUEST ${requestId} COMPLETED: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
-        onResponse(res.statusCode);
-        onComplete();
+        console.log(`HTTPS COMPLETED ${requestId}: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
+        
+        if (res.statusCode >= 500) {
+          this.retryRequest(apiKey, requestData, onComplete, 1);
+        } else {
+          requestData.onResponse(res.statusCode);
+          onComplete();
+        }
       });
     });
     
     req.on('error', (err) => {
-      console.log(`REQUEST ${requestId} ERROR: ${err.message}, Key=${apiKey.slice(-8)}`);
-      onResponse(500);
-      onComplete();
+      console.log(`HTTPS ERROR ${requestId}: ${err.message}, Key=${apiKey.slice(-8)}`);
+      this.retryRequest(apiKey, requestData, onComplete, 1);
+    });
+    
+    req.on('timeout', () => {
+      console.log(`HTTPS TIMEOUT ${requestId}: Key=${apiKey.slice(-8)}`);
+      req.destroy();
+      this.retryRequest(apiKey, requestData, onComplete, 1);
     });
     
     req.write(postData);
     req.end();
   }
+  
+  retryRequest(apiKey, requestData, onComplete, attempt) {
+    if (attempt > 2) {
+      console.log(`MAX RETRIES REACHED ${requestData.requestId}: Key=${apiKey.slice(-8)}`);
+      requestData.onResponse(500);
+      onComplete();
+      return;
+    }
+    
+    const backoffDelay = Math.min(250 * attempt + Math.random() * 100, 1000);
+    console.log(`RETRY ${requestData.requestId} (attempt ${attempt + 1}): Key=${apiKey.slice(-8)}, delay=${Math.round(backoffDelay)}ms`);
+    
+    setTimeout(() => {
+      this.executeRequest(apiKey, requestData, onComplete);
+    }, backoffDelay);
+  }
 }
 
-const keyManager = new APIKeyManager();
+const apiManager = new OptimizedAPIManager();
 
 app.post('/', (req, res) => {
   const { url } = req.body;
@@ -99,10 +231,12 @@ app.post('/', (req, res) => {
   const targetUrl = url.slice(0, slashIndex + 1);
   
   console.log(`STARTING: URL=${url}, COUNT=${count}, TARGET=${targetUrl}`);
+  console.log(`PROTOCOL: ${apiManager.useHTTP2 ? 'HTTP/2' : 'HTTPS Keep-Alive'}`);
   console.log(`DISTRIBUTING ${count} requests across ${apiKeys.length} API keys`);
   
   let completed = 0;
   const results = { success: 0, failed: 0 };
+  const startTime = Date.now();
   
   for (let i = 0; i < count; i++) {
     const keyIndex = i % apiKeys.length;
@@ -119,14 +253,15 @@ app.post('/', (req, res) => {
         }
         
         if (completed === count) {
+          const endTime = Date.now();
+          const duration = ((endTime - startTime) / 1000).toFixed(1);
           const successRate = (results.success / count * 100).toFixed(1);
-          console.log(`ALL REQUESTS COMPLETE: ${results.success}/${count} successful (${successRate}%)`);
-          console.log(`Failed: ${results.failed}, Success: ${results.success}`);
+          console.log(`ALL REQUESTS COMPLETE: ${results.success}/${count} successful (${successRate}%) in ${duration}s`);
         }
       }
     };
     
-    keyManager.addRequest(keyIndex, requestData);
+    apiManager.addRequest(keyIndex, requestData);
   }
 });
 
