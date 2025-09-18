@@ -33,16 +33,16 @@ app.post('/', (req, res) => {
         headers: {'Content-Type': 'application/json', 'Content-Length': postData.length},
         agent: agent
       };
-      console.log(`REQUEST ${i+1}/${count}: Country=${country}, Agent=${i % 5}, Key=${i % 10}`);
+      console.log(`REQUEST ${i+1}/${count}: Country=${country}, Agent=${i % 5}, Key=${apiKey.slice(-8)}`);
       const req = https.request(options, (res) => {
-        console.log(`RESPONSE ${i+1}: Status=${res.statusCode}`);
+        console.log(`RESPONSE ${i+1}: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
         res.on('data', () => {});
         res.on('end', () => {
           completed++;
-          console.log(`REQUEST ${i+1} COMPLETED. Total: ${completed}/${count}`);
+          console.log(`REQUEST ${i+1} COMPLETED. Total: ${completed}/${count}, Key=${apiKey.slice(-8)}`);
         });
       });
-      req.on('error', (err) => console.log(`REQUEST ${i+1} ERROR:`, err.message));
+      req.on('error', (err) => console.log(`REQUEST ${i+1} ERROR: ${err.message}, Key=${apiKey.slice(-8)}`));
       req.write(postData);
       req.end();
     }, i * 2000);
