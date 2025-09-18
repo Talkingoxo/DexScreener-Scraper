@@ -1,172 +1,268 @@
-const apiKeys=[
-  "00a5af9578784f0d9c96e4fccd458b4b",
-  "800b76f2e1bb4e8faea57d2add88601f",
-  "a180661526ac40eeaafe5d1a90d11b52",
-  "ae5ce549f49c4b17ab69b4e2f34fcc2e",
-  "cd8dfbb8ab4745eab854614cca70a5d8",
-  "34499358b9fd46a1a059cfd96d79db42",
-  "7992bcd991df4f639e8941c68186c7fc",
-  "fdd914f432d748889371e0307691c835",
-  "41f5cebd207042dd8a8acac2329ddb32",
-  "f6d87ae9284543e3b2d14f11a36e1dcd"
+const express = require('express');
+const https = require('https');
+const http2 = require('http2');
+const app = express();
+const port = process.env.PORT || 3000;
+app.use(express.json());
+
+const apiKeys = [
+  '00a5af9578784f0d9c96e4fccd458b4b',
+  '800b76f2e1bb4e8faea57d2add88601f',
+  'a180661526ac40eeaafe5d1a90d11b52',
+  'ae5ce549f49c4b17ab69b4e2f34fcc2e',
+  'cd8dfbb8ab4745eab854614cca70a5d8',
+  '34499358b9fd46a1a059cfd96d79db42',
+  '7992bcd991df4f639e8941c68186c7fc',
+  'fdd914f432d748889371e0307691c835',
+  '41f5cebd207042dd8a8acac2329ddb32',
+  'f6d87ae9284543e3b2d14f11a36e1dcd'
 ];
+const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
 
-const DEFAULT_COUNTRIES=["BR","CA","CN","CZ","FR","DE","HK","IN","ID","IT","IL","RU","SA","SG","ES","PL","NL","VN","GB","KR","JP","AE","US"];
-
-const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
-const now=()=>new Date().toISOString();
-const clampInt=(v,min,max)=>{if(v==null)return null;const n=Number(v);if(!Number.isFinite(n))return null;return Math.min(max,Math.max(min,Math.trunc(n)));};
-const splitList=(s)=>!s?[]:Array.from(new Set(s.split(",").map(x=>x.trim()).filter(Boolean)));
-const pathCountOrNull=(p)=>{const m=p.match(/^\/(\d+)(?:\/|$)/);return m?parseInt(m[1],10):null;};
-const truncate=(s,n)=>!s?"":(s.length>n?s.slice(0,n-1)+"…":s);
-const randInt=(a,b)=>Math.floor(a+Math.random()*(b-a+1));
-
-async function checkH3Support(target){
-  let altSvc="";let supportsH3=false;let ok=false;let status=0;
-  try{
-    const r=await fetch(target,{method:"HEAD",redirect:"manual",cf:{cacheTtl:0}});
-    status=r.status;altSvc=r.headers.get("alt-svc")||"";
-    supportsH3=/\bh3\b/i.test(altSvc);
-    ok=true;
-  }catch(e){}
-  return {ok,status,altSvc,supportsH3};
-}
-
-async function doRequest(idx,target,method,body,key,country,timeoutMs,userHeaders){
-  const controller=new AbortController();
-  const t=setTimeout(()=>controller.abort("timeout"),timeoutMs);
-  const headers=new Headers(userHeaders||{});
-  if(!headers.has("authorization"))headers.set("authorization","Bearer "+key);
-  if(!headers.has("x-api-key"))headers.set("x-api-key",key);
-  if(!headers.has("X-Api-Key"))headers.set("X-Api-Key",key);
-  headers.set("CF-IPCountry",country);
-  const opts={method,body,signal:controller.signal,headers,redirect:"follow",cf:{cacheTtl:0,fetchTTL:0}};
-  let status=0,ok=false,conflict=false,timeout=false;
-  try{
-    const res=await fetch(target,opts);
-    status=res.status;ok=res.ok;conflict=status===409;
-    console.log(`${now()} H2 RES ${idx}: ${status}, Key=${key.slice(-8)}`);
-    console.log(`${now()} H2 END ${idx}: ${status}, Key=${key.slice(-8)}`);
-  }catch(e){
-    if(e==="timeout"||e?.name==="TimeoutError"||e?.name==="AbortError"){
-      timeout=true;
-      console.log(`${now()} H2 TIMEOUT ${idx}: Key=${key.slice(-8)}`);
-      console.log(`${now()} H2 END ${idx}: 0, Key=${key.slice(-8)}`);
-    }else{
-      console.log(`${now()} H2 ERR ${idx}: ${String(e)}`);
-    }
-  }finally{clearTimeout(t);}
-  return {ok,status,conflict,timeout};
-}
-
-function makeKeyState(baseCd,maxCd,perKey){
-  const s=new Map();
-  return{
-    get(k){if(!s.has(k))s.set(k,{busy:0,coolUntil:0,backoff:baseCd});return s.get(k);},
-    async acquire(k){
-      const state=this.get(k);
-      for(;;){
-        const nowMs=Date.now();
-        if(state.busy<perKey&&nowMs>=state.coolUntil){state.busy++;return;}
-        const wait=Math.max(50,Math.min(250,Math.max(0,state.coolUntil-nowMs)));
-        await sleep(wait);
-      }
-    },
-    release(k){const state=this.get(k);state.busy=Math.max(0,state.busy-1);},
-    cooldown(k,attempt){
-      const state=this.get(k);
-      const jitter=randInt(0,state.backoff);
-      const wait=state.backoff+jitter;
-      state.coolUntil=Date.now()+wait;
-      state.backoff=Math.min(maxCd,Math.floor(state.backoff*1.7));
-      return wait;
-    },
-    success(k){
-      const state=this.get(k);
-      state.backoff=Math.max(baseCd,Math.floor(state.backoff*0.8));
-    }
-  };
-}
-
-async function runBurst({request,url}){
-  const target=url.searchParams.get("target");
-  if(!target)return new Response("Missing ?target",{status:400});
-  const pathCount=pathCountOrNull(url.pathname);
-  const count=clampInt(url.searchParams.get("count"),1,10000)??pathCount??25;
-  const concurrency=clampInt(url.searchParams.get("concurrency"),1,500)??Math.min(count,apiKeys.length||10);
-  const retries=clampInt(url.searchParams.get("retries"),0,10)??2;
-  const timeoutMs=clampInt(url.searchParams.get("timeout"),100,60000)??10000;
-  const method=(url.searchParams.get("method")||"GET").toUpperCase();
-  const bodyParam=url.searchParams.get("body");
-  const body=bodyParam==null?undefined:bodyParam;
-  const countries=splitList(url.searchParams.get("countries"));
-  const countryList=countries.length?countries:DEFAULT_COUNTRIES;
-  const wantH3Check=(url.searchParams.get("h3check")||"true").toLowerCase()==="true";
-  const perKey=clampInt(url.searchParams.get("pkc"),1,50)??1;
-  const baseCd=clampInt(url.searchParams.get("baseCd"),100,60000)??1500;
-  const maxCd=clampInt(url.searchParams.get("maxCd"),500,300000)??8000;
-  const userHeadersInput=url.searchParams.get("headers");
-  let userHeaders={};
-  if(userHeadersInput){try{userHeaders=JSON.parse(userHeadersInput);}catch{}}
-  const inboundProto=request.cf?.httpProtocol||"unknown";
-  console.log(`${now()} STARTING: URL=${request.url}, COUNT=${count}, TARGET=${new URL(target).origin}`);
-  console.log(`${now()} PROTOCOL: ${inboundProto}`);
-  console.log(`${now()} DISTRIBUTING ${count} requests across ${apiKeys.length} API keys`);
-  if(wantH3Check){
-    try{
-      const h3=await checkH3Support(target);
-      console.log(`${now()} H3 CHECK: advertises_h3=${h3.supportsH3}, alt-svc="${truncate(h3.altSvc,256)}"`);
-    }catch(e){
-      console.log(`${now()} H3 CHECK: error=${String(e)}`);
+class OptimizedAPIManager {
+  constructor() {
+    this.keyQueues = {};
+    this.keyInFlight = {};
+    this.http2Session = null;
+    this.httpsAgent = null;
+    this.useHTTP2 = false;
+    this.initializeConnections();
+    
+    apiKeys.forEach(key => {
+      this.keyQueues[key] = [];
+      this.keyInFlight[key] = false;
+    });
+  }
+  
+  async initializeConnections() {
+    try {
+      console.log('Testing HTTP/2 support for api.scrapingant.com...');
+      this.http2Session = http2.connect('https://api.scrapingant.com');
+      
+      this.http2Session.on('connect', () => {
+        console.log('HTTP/2 connection established');
+        this.useHTTP2 = true;
+      });
+      
+      this.http2Session.on('error', (err) => {
+        console.log('HTTP/2 failed, falling back to HTTPS:', err.message);
+        this.useHTTP2 = false;
+        this.setupHTTPSAgent();
+      });
+      
+      setTimeout(() => {
+        if (!this.useHTTP2) {
+          console.log('HTTP/2 timeout, using HTTPS with keep-alive');
+          this.setupHTTPSAgent();
+        }
+      }, 2000);
+      
+    } catch (err) {
+      console.log('HTTP/2 not supported, using HTTPS:', err.message);
+      this.setupHTTPSAgent();
     }
   }
-  const jobs=new Array(count).fill(0).map((_,i)=>({idx:i,key:apiKeys[i%apiKeys.length],country:countryList[i%countryList.length]}));
-  let okCount=0;
-  const keyState=makeKeyState(baseCd,maxCd,perKey);
-  const start=Date.now();
-  let next=0;
-  const workers=Math.min(concurrency,jobs.length||1);
-  const runWorker=async()=>{
-    while(true){
-      const j=next++;
-      if(j>=jobs.length)break;
-      const {idx,key,country}=jobs[j];
-      console.log(`${now()} H2 REQ ${idx}: Key=${key.slice(-8)}, Country=${country}`);
-      let attempt=1;
-      for(;;){
-        await keyState.acquire(key);
-        const r=await doRequest(idx,target,method,body,key,country,timeoutMs,userHeaders);
-        keyState.release(key);
-        if(r.ok){okCount++;keyState.success(key);break;}
-        if(r.conflict){
-          const wait=keyState.cooldown(key,attempt);
-          console.log(`${now()} COOLDOWN Key=${key.slice(-8)} for ~${wait}ms (status 409, attempt ${attempt})`);
-          if(attempt<=retries){attempt++;await sleep(50);continue;}
-          break;
-        }
-        if((!r.ok)&&attempt<=retries){
-          const wait=300+randInt(0,500);
-          console.log(`${now()} RETRY ${idx} (attempt ${attempt}) after ${wait}ms`);
-          await sleep(wait);
-          attempt++;continue;
-        }
-        break;
-      }
+  
+  setupHTTPSAgent() {
+    this.httpsAgent = new https.Agent({
+      keepAlive: true,
+      keepAliveMsecs: 30000,
+      maxSockets: 50,
+      maxFreeSockets: 10
+    });
+  }
+  
+  addRequest(keyIndex, requestData) {
+    const key = apiKeys[keyIndex];
+    this.keyQueues[key].push(requestData);
+    this.processQueue(key);
+  }
+  
+  processQueue(key) {
+    if (this.keyInFlight[key] || this.keyQueues[key].length === 0) {
+      return;
     }
-  };
-  await Promise.all(new Array(workers).fill(0).map(runWorker));
-  const elapsed=(Date.now()-start)/1000;
-  const pct=((okCount/count)*100).toFixed(1);
-  console.log(`${now()} ALL COMPLETE: ${okCount}/${count} (${pct}%) in ${elapsed.toFixed(1)}s`);
-  const resBody=JSON.stringify({ok:okCount,total:count,pct:parseFloat(pct),elapsed,inboundProtocol:inboundProto,perKeyConcurrency:perKey},{});
-  return new Response(resBody,{headers:{"content-type":"application/json"}});
+    
+    this.keyInFlight[key] = true;
+    const requestData = this.keyQueues[key].shift();
+    
+    this.executeRequest(key, requestData, () => {
+      this.keyInFlight[key] = false;
+      this.processQueue(key);
+    });
+  }
+  
+  executeRequest(apiKey, requestData, onComplete) {
+    const { targetUrl, requestId, onResponse } = requestData;
+    const country = countries[requestId % 23];
+    const postData = `{"worker-id":${requestId}}`;
+    
+    if (this.useHTTP2 && this.http2Session) {
+      this.executeHTTP2Request(apiKey, requestData, onComplete);
+    } else {
+      this.executeHTTPSRequest(apiKey, requestData, onComplete);
+    }
+  }
+  
+  executeHTTP2Request(apiKey, requestData, onComplete) {
+    const { targetUrl, requestId } = requestData;
+    const country = countries[requestId % 23];
+    const postData = `{"worker-id":${requestId}}`;
+    
+    console.log(`HTTP/2 REQUEST ${requestId}: Key=${apiKey.slice(-8)}, Country=${country}`);
+    
+    const stream = this.http2Session.request({
+      ':method': 'POST',
+      ':path': `/v2/general?url=${encodeURIComponent(targetUrl)}&x-api-key=${apiKey}&proxy_country=${country}&proxy_type=datacenter&browser=false`,
+      'content-type': 'application/json',
+      'content-length': postData.length
+    }, { timeout: 10000 });
+    
+    let statusCode = null;
+    
+    stream.on('response', (headers) => {
+      statusCode = headers[':status'];
+      console.log(`HTTP/2 RESPONSE ${requestId}: Status=${statusCode}, Key=${apiKey.slice(-8)}`);
+    });
+    
+    stream.on('data', () => {});
+    
+    stream.on('end', () => {
+      console.log(`HTTP/2 COMPLETED ${requestId}: Status=${statusCode}, Key=${apiKey.slice(-8)}`);
+      
+      if (statusCode >= 500) {
+        this.retryRequest(apiKey, requestData, onComplete, 1);
+      } else {
+        requestData.onResponse(statusCode);
+        onComplete();
+      }
+    });
+    
+    stream.on('error', (err) => {
+      console.log(`HTTP/2 ERROR ${requestId}: ${err.message}, Key=${apiKey.slice(-8)}`);
+      this.retryRequest(apiKey, requestData, onComplete, 1);
+    });
+    
+    stream.on('timeout', () => {
+      console.log(`HTTP/2 TIMEOUT ${requestId}: Key=${apiKey.slice(-8)}`);
+      stream.destroy();
+      this.retryRequest(apiKey, requestData, onComplete, 1);
+    });
+    
+    stream.write(postData);
+    stream.end();
+  }
+  
+  executeHTTPSRequest(apiKey, requestData, onComplete) {
+    const { targetUrl, requestId } = requestData;
+    const country = countries[requestId % 23];
+    const postData = `{"worker-id":${requestId}}`;
+    
+    const options = {
+      hostname: 'api.scrapingant.com',
+      port: 443,
+      path: `/v2/general?url=${encodeURIComponent(targetUrl)}&x-api-key=${apiKey}&proxy_country=${country}&proxy_type=datacenter&browser=false`,
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Content-Length': postData.length},
+      agent: this.httpsAgent,
+      timeout: 10000
+    };
+    
+    console.log(`HTTPS REQUEST ${requestId}: Key=${apiKey.slice(-8)}, Country=${country}`);
+    
+    const req = https.request(options, (res) => {
+      console.log(`HTTPS RESPONSE ${requestId}: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
+      
+      res.on('data', () => {});
+      res.on('end', () => {
+        console.log(`HTTPS COMPLETED ${requestId}: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
+        
+        if (res.statusCode >= 500) {
+          this.retryRequest(apiKey, requestData, onComplete, 1);
+        } else {
+          requestData.onResponse(res.statusCode);
+          onComplete();
+        }
+      });
+    });
+    
+    req.on('error', (err) => {
+      console.log(`HTTPS ERROR ${requestId}: ${err.message}, Key=${apiKey.slice(-8)}`);
+      this.retryRequest(apiKey, requestData, onComplete, 1);
+    });
+    
+    req.on('timeout', () => {
+      console.log(`HTTPS TIMEOUT ${requestId}: Key=${apiKey.slice(-8)}`);
+      req.destroy();
+      this.retryRequest(apiKey, requestData, onComplete, 1);
+    });
+    
+    req.write(postData);
+    req.end();
+  }
+  
+  retryRequest(apiKey, requestData, onComplete, attempt) {
+    if (attempt > 2) {
+      console.log(`MAX RETRIES REACHED ${requestData.requestId}: Key=${apiKey.slice(-8)}`);
+      requestData.onResponse(500);
+      onComplete();
+      return;
+    }
+    
+    const backoffDelay = Math.min(250 * attempt + Math.random() * 100, 1000);
+    console.log(`RETRY ${requestData.requestId} (attempt ${attempt + 1}): Key=${apiKey.slice(-8)}, delay=${Math.round(backoffDelay)}ms`);
+    
+    setTimeout(() => {
+      this.executeRequest(apiKey, requestData, onComplete);
+    }, backoffDelay);
+  }
 }
 
-export default{
-  async fetch(request){
-    const url=new URL(request.url);
-    if(url.pathname==="/health")return new Response("ok");
-    if(url.pathname==="/proto"){const p=request.cf?.httpProtocol||"unknown";return new Response(JSON.stringify({inboundProtocol:p},null,2),{headers:{"content-type":"application/json"}});}
-    return runBurst({request,url});
+const apiManager = new OptimizedAPIManager();
+
+app.post('/', (req, res) => {
+  const { url } = req.body;
+  res.end();
+  if (!url) return;
+  
+  const slashIndex = url.lastIndexOf('/');
+  const lastPart = url.slice(slashIndex + 1);
+  const count = +lastPart || 1;
+  const targetUrl = url.slice(0, slashIndex + 1);
+  
+  console.log(`STARTING: URL=${url}, COUNT=${count}, TARGET=${targetUrl}`);
+  console.log(`PROTOCOL: ${apiManager.useHTTP2 ? 'HTTP/2' : 'HTTPS Keep-Alive'}`);
+  console.log(`DISTRIBUTING ${count} requests across ${apiKeys.length} API keys`);
+  
+  let completed = 0;
+  const results = { success: 0, failed: 0 };
+  const startTime = Date.now();
+  
+  for (let i = 0; i < count; i++) {
+    const keyIndex = i % apiKeys.length;
+    
+    const requestData = {
+      targetUrl,
+      requestId: i,
+      onResponse: (statusCode) => {
+        completed++;
+        if (statusCode === 200) {
+          results.success++;
+        } else {
+          results.failed++;
+        }
+        
+        if (completed === count) {
+          const endTime = Date.now();
+          const duration = ((endTime - startTime) / 1000).toFixed(1);
+          const successRate = (results.success / count * 100).toFixed(1);
+          console.log(`ALL REQUESTS COMPLETE: ${results.success}/${count} successful (${successRate}%) in ${duration}s`);
+        }
+      }
+    };
+    
+    apiManager.addRequest(keyIndex, requestData);
   }
-};
+});
+
+app.listen(port, () => console.log(`Service running on port ${port}`));
