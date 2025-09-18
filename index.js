@@ -12,6 +12,7 @@ app.post('/', (req, res) => {
   const count = +lastPart || 1;
   const targetUrl = url.slice(0, slashIndex + 1);
   const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
+  const apiKeys = ['00a5af9578784f0d9c96e4fccd458b4b','800b76f2e1bb4e8faea57d2add88601f','a180661526ac40eeaafe5d1a90d11b52','ae5ce549f49c4b17ab69b4e2f34fcc2e','cd8dfbb8ab4745eab854614cca70a5d8','34499358b9fd46a1a059cfd96d79db42','7992bcd991df4f639e8941c68186c7fc','fdd914f432d748889371e0307691c835','41f5cebd207042dd8a8acac2329ddb32','f6d87ae9284543e3b2d14f11a36e1dcd'];
   console.log(`STARTING: URL=${url}, COUNT=${count}, TARGET=${targetUrl}`);
   let completed = 0;
   const agents = [];
@@ -21,17 +22,18 @@ app.post('/', (req, res) => {
   for (let i = 0; i < count; i++) {
     setTimeout(() => {
       const country = countries[i % 23];
+      const apiKey = apiKeys[i % 10];
       const agent = agents[i % 5];
       const postData = `{"worker-id":${i}}`;
       const options = {
         hostname: 'api.scrapingant.com',
         port: 443,
-        path: `/v2/general?url=${encodeURIComponent(targetUrl)}&x-api-key=2a33de63f0054f1cb33f5857a3fe00c5&proxy_country=${country}&proxy_type=datacenter&browser=false`,
+        path: `/v2/general?url=${encodeURIComponent(targetUrl)}&x-api-key=${apiKey}&proxy_country=${country}&proxy_type=datacenter&browser=false`,
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'Content-Length': postData.length},
         agent: agent
       };
-      console.log(`REQUEST ${i+1}/${count}: Country=${country}, Agent=${i % 5}`);
+      console.log(`REQUEST ${i+1}/${count}: Country=${country}, Agent=${i % 5}, Key=${i % 10}`);
       const req = https.request(options, (res) => {
         console.log(`RESPONSE ${i+1}: Status=${res.statusCode}`);
         res.on('data', () => {});
@@ -43,7 +45,7 @@ app.post('/', (req, res) => {
       req.on('error', (err) => console.log(`REQUEST ${i+1} ERROR:`, err.message));
       req.write(postData);
       req.end();
-    }, i * 5000);
+    }, i * 2000);
   }
   console.log(`LOOP COMPLETED: Created ${count} requests with ${agents.length} agents`);
 });
