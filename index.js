@@ -28,7 +28,6 @@ class KeyManager {
     this.globalQueue = [];
     this.workers = {};
     this.inFlight = new Set();
-    this.completed = new Set();
     
     apiKeys.forEach(key => {
       const session = http2.connect('https://api.scrapingant.com');
@@ -81,10 +80,7 @@ class KeyManager {
         if (task.retries < 3) {
           this.globalQueue.unshift(task);
         } else {
-          if (!this.completed.has(task.id)) {
-            this.completed.add(task.id);
-            task.callback(500);
-          }
+          task.callback(500);
         }
         
         this.workers[key].busy = false;
@@ -105,8 +101,7 @@ class KeyManager {
         clearTimeout(timeout);
         console.log(`COMPLETED ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
         this.inFlight.delete(task.id);
-        if (!this.completed.has(task.id)) {
-          this.completed.add(task.id);
+        if (status !== null) {
           task.callback(status);
         }
         this.workers[key].busy = false;
@@ -120,10 +115,7 @@ class KeyManager {
         clearTimeout(timeout);
         console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`);
         this.inFlight.delete(task.id);
-        if (!this.completed.has(task.id)) {
-          this.completed.add(task.id);
-          task.callback(500);
-        }
+        task.callback(500);
         this.workers[key].busy = false;
         this.processNext();
       }
