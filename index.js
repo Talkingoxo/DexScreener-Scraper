@@ -18,162 +18,75 @@ const apiKeys = [
 ];
 const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
 
-let testResults = {};
-let testPhase = 0;
-
-function makeRequest(targetUrl, keyIndex, requestId, callback) {
-  const apiKey = apiKeys[keyIndex];
-  const country = countries[requestId % 23];
-  const postData = `{"worker-id":${requestId}}`;
-  
-  const options = {
-    hostname: 'api.scrapingant.com',
-    port: 443,
-    path: `/v2/general?url=${encodeURIComponent(targetUrl)}&x-api-key=${apiKey}&proxy_country=${country}&proxy_type=datacenter&browser=false`,
-    method: 'POST',
-    headers: {'Content-Type': 'application/json', 'Content-Length': postData.length}
-  };
-  
-  console.log(`REQUEST ${requestId}: Key=${apiKey.slice(-8)}, Country=${country}`);
-  
-  const req = https.request(options, (res) => {
-    console.log(`RESPONSE ${requestId}: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
-    res.on('data', () => {});
-    res.on('end', () => {
-      callback(res.statusCode);
+class APIKeyManager {
+  constructor() {
+    this.keyQueues = {};
+    this.keyInFlight = {};
+    
+    apiKeys.forEach(key => {
+      this.keyQueues[key] = [];
+      this.keyInFlight[key] = false;
     });
-  });
+  }
   
-  req.on('error', (err) => {
-    console.log(`REQUEST ${requestId} ERROR: ${err.message}, Key=${apiKey.slice(-8)}`);
-    callback(500);
-  });
+  addRequest(keyIndex, requestData) {
+    const key = apiKeys[keyIndex];
+    this.keyQueues[key].push(requestData);
+    this.processQueue(key);
+  }
   
-  req.write(postData);
-  req.end();
-}
-
-// Phase 1: Test each key with 5 rapid requests
-function phase1Test(targetUrl) {
-  console.log('PHASE 1: Testing 5 rapid requests per key');
-  testResults.phase1 = {};
-  
-  apiKeys.forEach((key, keyIndex) => {
-    testResults.phase1[key.slice(-8)] = [];
-    
-    for (let i = 0; i < 5; i++) {
-      setTimeout(() => {
-        makeRequest(targetUrl, keyIndex, keyIndex * 5 + i, (status) => {
-          testResults.phase1[key.slice(-8)].push(status);
-          
-          if (testResults.phase1[key.slice(-8)].length === 5) {
-            const successCount = testResults.phase1[key.slice(-8)].filter(s => s === 200).length;
-            console.log(`KEY ${key.slice(-8)}: ${successCount}/5 successful requests`);
-            
-            const allKeysComplete = Object.values(testResults.phase1).every(arr => arr.length === 5);
-            if (allKeysComplete) {
-              console.log('PHASE 1 COMPLETE. Waiting 60 seconds...');
-              setTimeout(() => phase2Test(targetUrl), 60000);
-            }
-          }
-        });
-      }, i * 200);
-    }
-  });
-}
-
-// Phase 2: Test with calculated delays (12 seconds between requests per key)
-function phase2Test(targetUrl) {
-  console.log('PHASE 2: Testing with 12-second delays per key');
-  testResults.phase2 = {};
-  const delayBetweenRequests = 12000; // 60s / 5 requests = 12s
-  
-  apiKeys.forEach((key, keyIndex) => {
-    testResults.phase2[key.slice(-8)] = [];
-    
-    for (let i = 0; i < 5; i++) {
-      setTimeout(() => {
-        makeRequest(targetUrl, keyIndex, keyIndex * 5 + i + 50, (status) => {
-          testResults.phase2[key.slice(-8)].push(status);
-          
-          if (testResults.phase2[key.slice(-8)].length === 5) {
-            const successCount = testResults.phase2[key.slice(-8)].filter(s => s === 200).length;
-            console.log(`KEY ${key.slice(-8)}: ${successCount}/5 successful with 12s delay`);
-            
-            const allKeysComplete = Object.values(testResults.phase2).every(arr => arr.length === 5);
-            if (allKeysComplete) {
-              console.log('PHASE 2 COMPLETE. Waiting 60 seconds...');
-              setTimeout(() => phase3Test(targetUrl), 60000);
-            }
-          }
-        });
-      }, keyIndex * 1200 + i * delayBetweenRequests);
-    }
-  });
-}
-
-// Phase 3: Advanced testing - round robin with optimal spacing
-function phase3Test(targetUrl) {
-  console.log('PHASE 3: Round-robin testing with 6-second intervals');
-  testResults.phase3 = {};
-  
-  apiKeys.forEach(key => {
-    testResults.phase3[key.slice(-8)] = [];
-  });
-  
-  let requestCounter = 0;
-  const totalRequests = 50; // 5 per key
-  const intervalBetweenRequests = 6000; // 6 seconds
-  
-  const interval = setInterval(() => {
-    if (requestCounter >= totalRequests) {
-      clearInterval(interval);
-      console.log('PHASE 3 COMPLETE');
-      analyzeResults();
+  processQueue(key) {
+    if (this.keyInFlight[key] || this.keyQueues[key].length === 0) {
       return;
     }
     
-    const keyIndex = requestCounter % 10;
-    makeRequest(targetUrl, keyIndex, requestCounter + 100, (status) => {
-      const keyId = apiKeys[keyIndex].slice(-8);
-      testResults.phase3[keyId].push(status);
+    this.keyInFlight[key] = true;
+    const requestData = this.keyQueues[key].shift();
+    
+    this.executeRequest(key, requestData, () => {
+      this.keyInFlight[key] = false;
+      setTimeout(() => this.processQueue(key), 100);
+    });
+  }
+  
+  executeRequest(apiKey, requestData, onComplete) {
+    const { targetUrl, requestId, onResponse } = requestData;
+    const country = countries[requestId % 23];
+    const postData = `{"worker-id":${requestId}}`;
+    
+    const options = {
+      hostname: 'api.scrapingant.com',
+      port: 443,
+      path: `/v2/general?url=${encodeURIComponent(targetUrl)}&x-api-key=${apiKey}&proxy_country=${country}&proxy_type=datacenter&browser=false`,
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Content-Length': postData.length}
+    };
+    
+    console.log(`REQUEST ${requestId}: Key=${apiKey.slice(-8)}, Country=${country}`);
+    
+    const req = https.request(options, (res) => {
+      console.log(`RESPONSE ${requestId}: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
       
-      if (status === 200) {
-        console.log(`SUCCESS: Key ${keyId} - Request ${requestCounter + 1}`);
-      } else {
-        console.log(`FAILED: Key ${keyId} - Request ${requestCounter + 1} - Status ${status}`);
-      }
+      res.on('data', () => {});
+      res.on('end', () => {
+        console.log(`REQUEST ${requestId} COMPLETED: Status=${res.statusCode}, Key=${apiKey.slice(-8)}`);
+        onResponse(res.statusCode);
+        onComplete();
+      });
     });
     
-    requestCounter++;
-  }, intervalBetweenRequests);
+    req.on('error', (err) => {
+      console.log(`REQUEST ${requestId} ERROR: ${err.message}, Key=${apiKey.slice(-8)}`);
+      onResponse(500);
+      onComplete();
+    });
+    
+    req.write(postData);
+    req.end();
+  }
 }
 
-function analyzeResults() {
-  console.log('\n=== FINAL ANALYSIS ===');
-  
-  apiKeys.forEach(key => {
-    const keyId = key.slice(-8);
-    const phase1Success = testResults.phase1[keyId]?.filter(s => s === 200).length || 0;
-    const phase2Success = testResults.phase2[keyId]?.filter(s => s === 200).length || 0;
-    const phase3Success = testResults.phase3[keyId]?.filter(s => s === 200).length || 0;
-    
-    console.log(`KEY ${keyId}: Phase1=${phase1Success}/5, Phase2=${phase2Success}/5, Phase3=${phase3Success}/5`);
-  });
-  
-  const totalPhase1 = Object.values(testResults.phase1).flat().filter(s => s === 200).length;
-  const totalPhase2 = Object.values(testResults.phase2).flat().filter(s => s === 200).length;
-  const totalPhase3 = Object.values(testResults.phase3).flat().filter(s => s === 200).length;
-  
-  console.log(`\nTOTAL SUCCESS RATES:`);
-  console.log(`Phase 1 (Rapid): ${totalPhase1}/50 (${(totalPhase1/50*100).toFixed(1)}%)`);
-  console.log(`Phase 2 (12s delay): ${totalPhase2}/50 (${(totalPhase2/50*100).toFixed(1)}%)`);
-  console.log(`Phase 3 (Round-robin): ${totalPhase3}/50 (${(totalPhase3/50*100).toFixed(1)}%)`);
-  
-  const bestPhase = totalPhase3 > totalPhase2 && totalPhase3 > totalPhase1 ? 'Phase 3' : 
-                   totalPhase2 > totalPhase1 ? 'Phase 2' : 'Phase 1';
-  console.log(`OPTIMAL STRATEGY: ${bestPhase}`);
-}
+const keyManager = new APIKeyManager();
 
 app.post('/', (req, res) => {
   const { url } = req.body;
@@ -181,10 +94,40 @@ app.post('/', (req, res) => {
   if (!url) return;
   
   const slashIndex = url.lastIndexOf('/');
+  const lastPart = url.slice(slashIndex + 1);
+  const count = +lastPart || 1;
   const targetUrl = url.slice(0, slashIndex + 1);
   
-  console.log(`STARTING COMPREHENSIVE API KEY TESTING: TARGET=${targetUrl}`);
-  phase1Test(targetUrl);
+  console.log(`STARTING: URL=${url}, COUNT=${count}, TARGET=${targetUrl}`);
+  console.log(`DISTRIBUTING ${count} requests across ${apiKeys.length} API keys`);
+  
+  let completed = 0;
+  const results = { success: 0, failed: 0 };
+  
+  for (let i = 0; i < count; i++) {
+    const keyIndex = i % apiKeys.length;
+    
+    const requestData = {
+      targetUrl,
+      requestId: i,
+      onResponse: (statusCode) => {
+        completed++;
+        if (statusCode === 200) {
+          results.success++;
+        } else {
+          results.failed++;
+        }
+        
+        if (completed === count) {
+          const successRate = (results.success / count * 100).toFixed(1);
+          console.log(`ALL REQUESTS COMPLETE: ${results.success}/${count} successful (${successRate}%)`);
+          console.log(`Failed: ${results.failed}, Success: ${results.success}`);
+        }
+      }
+    };
+    
+    keyManager.addRequest(keyIndex, requestData);
+  }
 });
 
 app.listen(port, () => console.log(`Service running on port ${port}`));
