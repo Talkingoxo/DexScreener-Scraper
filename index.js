@@ -112,6 +112,10 @@ class KeyManager {
       this.workers[key].busy = false;
       stream.close();
       task.retries = (task.retries || 0) + 1;
+      if (!tokens.has(task.token)) {
+        finish(500);
+        return;
+      }
       const timeout = setTimeout(() => {this.queue.push(task); this.process();}, 200 + Math.random() * 300);
       this.timeouts.push(timeout);
       this.process();
@@ -122,7 +126,7 @@ class KeyManager {
     
     const hedgeTimeout = setTimeout(() => {
       if (!done && !this.hedging.has(task.id)) {
-        this.hedging.set(task.id, true);
+        this.hedging.set(task.id, hedgeTimeout);
         this.queue.unshift({...task, isHedge: true});
         this.process();
       }
@@ -147,10 +151,10 @@ class KeyManager {
 let manager = new KeyManager();
 
 app.get('/gate', (req, res) => {
-  const {token, target} = req.query;
+  const {token} = req.query;
   
-  if (!token || !target) {
-    res.status(400).end('Missing token or target');
+  if (!token) {
+    res.status(400).end('Missing token');
     return;
   }
   
@@ -166,7 +170,10 @@ app.get('/gate', (req, res) => {
     return;
   }
   
-  res.redirect(302, target);
+  tokens.delete(token);
+  res.set('Cache-Control', 'no-store');
+  res.set('Referrer-Policy', 'no-referrer');
+  res.redirect(302, tokenData.target);
 });
 
 app.post('/', (req, res) => {
@@ -187,7 +194,7 @@ app.post('/', (req, res) => {
     const token = Date.now().toString(36) + Math.random().toString(36).substr(2);
     tokens.set(token, {created: Date.now(), target: realTarget});
     
-    const gateUrl = `${req.protocol}://${req.get('host')}/gate?token=${token}&target=${encodeURIComponent(realTarget)}`;
+    const gateUrl = `${req.protocol}://${req.get('host')}/gate?token=${token}`;
     
     manager.add({
       id: i,
