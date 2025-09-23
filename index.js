@@ -15,9 +15,7 @@ class KeyManager {
     this.timeouts = [];
     
     apiKeys.forEach(key => {
-      const session = http2.connect('https://api.scrapingant.com');
-      session.on('error', () => {});
-      this.workers[key] = {session, busy: false};
+      this.workers[key] = {session: null, busy: false};
     });
   }
   
@@ -26,7 +24,16 @@ class KeyManager {
     this.process();
   }
   
-  process() {
+  getSession(key) {
+    const worker = this.workers[key];
+    if (!worker.session || worker.session.destroyed || worker.session.closed) {
+      worker.session = http2.connect('https://api.scrapingant.com');
+      worker.session.on('error', () => {worker.session = null; worker.busy = false;});
+      worker.session.on('close', () => {worker.session = null; worker.busy = false;});
+      worker.session.on('goaway', () => {worker.session = null; worker.busy = false;});
+    }
+    return worker.session;
+  }
     const key = Object.keys(this.workers).find(k => !this.workers[k].busy);
     if (!key || !this.queue.length) return;
     
@@ -43,7 +50,22 @@ class KeyManager {
   
   execute(key, task) {
     const countryIndex = task.retries ? (task.id + task.retries) % 23 : task.id % 23;
-    const stream = this.workers[key].session.request({':method': 'POST', ':path': `/v2/general?url=${encodeURIComponent(task.url)}&x-api-key=${key}&proxy_country=${countries[countryIndex]}&proxy_type=datacenter&browser=false`, 'content-type': 'application/json'});
+    
+    let stream;
+    try {
+      const session = this.getSession(key);
+      stream = session.request({':method': 'POST', ':path': `/v2/general?url=${encodeURIComponent(task.url)}&x-api-key=${key}&proxy_country=${countries[countryIndex]}&proxy_type=datacenter&browser=false`, 'content-type': 'application/json'});
+    } catch (err) {
+      if (err.code === 'ERR_HTTP2_INVALID_SESSION') {
+        this.workers[key].session = null;
+        this.workers[key].busy = false;
+        this.processing.delete(task.id);
+        const timeout = setTimeout(() => {this.queue.push(task); this.process();}, 200 + Math.random() * 300);
+        this.timeouts.push(timeout);
+        return;
+      }
+      throw err;
+    }
     
     console.log(`REQUEST ${task.id}: Key=${key.slice(-8)}, Country=${countries[countryIndex]}${task.retries ? `, Retry=${task.retries}` : ''}`);
     
@@ -91,7 +113,7 @@ class KeyManager {
   
   destroy() {
     this.timeouts.forEach(clearTimeout);
-    Object.values(this.workers).forEach(w => w.session.destroy());
+    Object.values(this.workers).forEach(w => {if (w.session && !w.session.destroyed) w.session.destroy();});
   }
 }
 
