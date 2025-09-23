@@ -31,7 +31,7 @@ class KeyManager {
     if (!key || !this.queue.length) return;
     
     const task = this.queue.shift();
-    if (this.processing.has(task.id)) {this.queue.push(task); return this.process();}
+    if (this.processing.has(task.id)) {this.queue.push(task); return;}
     
     this.processing.add(task.id);
     this.workers[key].busy = true;
