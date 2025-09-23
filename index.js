@@ -1,175 +1,93 @@
 const express = require('express');
 const http2 = require('http2');
 const app = express();
-const port = process.env.PORT || 3000;
 app.use(express.json());
 
-const apiKeys = [
-  '00a5af9578784f0d9c96e4fccd458b4b',
-  '800b76f2e1bb4e8faea57d2add88601f',
-  'a180661526ac40eeaafe5d1a90d11b52',
-  'ae5ce549f49c4b17ab69b4e2f34fcc2e',
-  'cd8dfbb8ab4745eab854614cca70a5d8',
-  '34499358b9fd46a1a059cfd96d79db42',
-  '7992bcd991df4f639e8941c68186c7fc',
-  'fdd914f432d748889371e0307691c835',
-  '41f5cebd207042dd8a8acac2329ddb32',
-  'f6d87ae9284543e3b2d14f11a36e1dcd'
-];
-
-const countries = [
-  'BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT',
-  'IL','JP','NL','PL','RU','SA','SG','KR','ES','GB',
-  'AE','US','VN'
-];
+const apiKeys = ['00a5af9578784f0d9c96e4fccd458b4b','800b76f2e1bb4e8faea57d2add88601f','a180661526ac40eeaafe5d1a90d11b52','ae5ce549f49c4b17ab69b4e2f34fcc2e','cd8dfbb8ab4745eab854614cca70a5d8','34499358b9fd46a1a059cfd96d79db42','7992bcd991df4f639e8941c68186c7fc','fdd914f432d748889371e0307691c835','41f5cebd207042dd8a8acac2329ddb32','f6d87ae9284543e3b2d14f11a36e1dcd'];
+const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
 
 class KeyManager {
   constructor() {
-    this.globalQueue = [];
+    this.queue = [];
     this.workers = {};
-    this.inFlight = new Set();
-    this.completedTasks = new Set();
-    this.pendingTimeouts = [];
-    this.destroyed = false;
+    this.processing = new Set();
+    this.completed = new Set();
+    this.timeouts = [];
     
     apiKeys.forEach(key => {
       const session = http2.connect('https://api.scrapingant.com');
-      session.on('error', err => console.log(`SESSION ERROR ${key.slice(-8)}: ${err.message}`));
-      this.workers[key] = { session, busy: false };
+      session.on('error', () => {});
+      this.workers[key] = {session, busy: false};
     });
   }
   
   add(task) {
-    if (this.destroyed) return;
-    this.globalQueue.push(task);
-    this.processNext();
+    this.queue.push(task);
+    this.process();
   }
   
-  processNext() {
-    if (this.destroyed) return;
-    const availableKey = Object.keys(this.workers).find(k => !this.workers[k].busy);
-    if (!availableKey || !this.globalQueue.length) return;
+  process() {
+    const key = Object.keys(this.workers).find(k => !this.workers[k].busy);
+    if (!key || !this.queue.length) return;
     
-    const task = this.globalQueue.shift();
-    if (this.inFlight.has(task.id)) return this.processNext();
+    const task = this.queue.shift();
+    if (this.processing.has(task.id)) return this.process();
     
-    this.inFlight.add(task.id);
-    this.workers[availableKey].busy = true;
-    this.executeTask(availableKey, task);
+    this.processing.add(task.id);
+    this.workers[key].busy = true;
+    this.execute(key, task);
   }
   
-  executeTask(key, task) {
-    if (this.destroyed) return;
-    
-    const countryIndex = task.retries 
-      ? (task.originalCountry + task.retries) % 23 
-      : task.id % 23;
-    
-    const stream = this.workers[key].session.request({
-      ':method': 'POST',
-      ':path': `/v2/general?url=${encodeURIComponent(task.url)}&x-api-key=${key}&proxy_country=${countries[countryIndex]}&proxy_type=datacenter&browser=false`,
-      'content-type': 'application/json'
-    });
+  execute(key, task) {
+    const countryIndex = task.retries ? (task.id + task.retries) % 23 : task.id % 23;
+    const stream = this.workers[key].session.request({':method': 'POST', ':path': `/v2/general?url=${encodeURIComponent(task.url)}&x-api-key=${key}&proxy_country=${countries[countryIndex]}&proxy_type=datacenter&browser=false`, 'content-type': 'application/json'});
     
     console.log(`REQUEST ${task.id}: Key=${key.slice(-8)}, Country=${countries[countryIndex]}${task.retries ? `, Retry=${task.retries}` : ''}`);
     
     let status = null;
-    let isDone = false;
+    let done = false;
     
-    const cleanup = () => {
-      isDone = true;
-      stream.removeAllListeners();
-      stream.close(http2.constants.NGHTTP2_CANCEL);
-      this.inFlight.delete(task.id);
+    const finish = (code) => {
+      if (done || this.completed.has(task.id)) return;
+      done = true;
+      this.completed.add(task.id);
+      this.processing.delete(task.id);
       this.workers[key].busy = false;
+      stream.close();
+      task.callback(code);
+      this.process();
     };
     
-    const handleComplete = (finalStatus) => {
-      if (isDone || this.completedTasks.has(task.id) || this.destroyed) return;
-      
-      this.completedTasks.add(task.id);
-      task.callback(finalStatus);
-    };
-    
-    const timeout = setTimeout(() => {
-      if (isDone || this.destroyed) return;
-      
-      console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`);
-      cleanup();
-      
+    const retry = () => {
+      if (done) return;
+      done = true;
+      this.processing.delete(task.id);
+      this.workers[key].busy = false;
+      stream.close();
       task.retries = (task.retries || 0) + 1;
-      task.originalCountry = task.originalCountry || task.id % 23;
-      
       if (task.retries < 3) {
-        const jitter = 300 + Math.random() * 500;
-        const retryTimeout = setTimeout(() => {
-          if (!this.destroyed) {
-            this.globalQueue.unshift(task);
-            this.processNext();
-          }
-        }, jitter);
-        this.pendingTimeouts.push(retryTimeout);
+        const timeout = setTimeout(() => {this.queue.push(task); this.process();}, 200 + Math.random() * 300);
+        this.timeouts.push(timeout);
       } else {
-        handleComplete(500);
+        finish(500);
       }
-      
-      this.processNext();
-    }, 5000);
+      this.process();
+    };
     
-    this.pendingTimeouts.push(timeout);
+    const timeout = setTimeout(() => {console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`); retry();}, 8000);
+    this.timeouts.push(timeout);
     
-    stream.on('response', headers => {
-      if (isDone || this.destroyed) return;
-      status = headers[':status'];
-      console.log(`RESPONSE ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
-    });
-    
+    stream.on('response', headers => {status = headers[':status']; console.log(`RESPONSE ${task.id}: Status=${status}, Key=${key.slice(-8)}`);});
+    stream.on('end', () => {clearTimeout(timeout); console.log(`COMPLETED ${task.id}: Status=${status}, Key=${key.slice(-8)}`); if (status === 409 && (!task.retries409 || task.retries409 < 1)) {task.retries409 = 1; retry();} else {finish(status);}});
+    stream.on('error', err => {clearTimeout(timeout); console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`); retry();});
     stream.on('data', () => {});
-    
-    stream.on('end', () => {
-      if (isDone || this.destroyed) return;
-      clearTimeout(timeout);
-      
-      console.log(`COMPLETED ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
-      
-      if (status === 409 && (!task.retries409 || task.retries409 < 1)) {
-        cleanup();
-        task.retries409 = (task.retries409 || 0) + 1;
-        
-        const jitter = 300 + Math.random() * 500;
-        const retryTimeout = setTimeout(() => {
-          if (!this.destroyed) {
-            this.globalQueue.unshift(task);
-            this.processNext();
-          }
-        }, jitter);
-        this.pendingTimeouts.push(retryTimeout);
-      } else {
-        cleanup();
-        handleComplete(status);
-      }
-      
-      this.processNext();
-    });
-    
-    stream.on('error', err => {
-      if (isDone || this.destroyed) return;
-      clearTimeout(timeout);
-      
-      console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`);
-      cleanup();
-      handleComplete(500);
-      this.processNext();
-    });
     
     stream.write(`{"worker-id":${task.id}}`);
     stream.end();
   }
   
   destroy() {
-    this.destroyed = true;
-    this.pendingTimeouts.forEach(t => clearTimeout(t));
-    this.pendingTimeouts = [];
+    this.timeouts.forEach(clearTimeout);
     Object.values(this.workers).forEach(w => w.session.destroy());
   }
 }
@@ -177,8 +95,8 @@ class KeyManager {
 let manager = new KeyManager();
 
 app.post('/', (req, res) => {
-  const { url } = req.body;
   res.end();
+  const {url} = req.body;
   if (!url) return;
   
   const slashIndex = url.lastIndexOf('/');
@@ -187,8 +105,7 @@ app.post('/', (req, res) => {
   
   console.log(`STARTING: COUNT=${count}, TARGET=${targetUrl}`);
   
-  let completed = 0;
-  let success = 0;
+  let completed = 0, success = 0;
   const start = Date.now();
   
   for (let i = 0; i < count; i++) {
@@ -198,12 +115,8 @@ app.post('/', (req, res) => {
       callback: (status) => {
         completed++;
         if (status >= 200 && status < 300) success++;
-        
         if (completed === count) {
-          const duration = ((Date.now() - start) / 1000).toFixed(1);
-          const rate = (success / count * 100).toFixed(1);
-          console.log(`FINISHED: ${success}/${count} success (${rate}%) in ${duration}s`);
-          
+          console.log(`FINISHED: ${success}/${count} success (${(success/count*100).toFixed(1)}%) in ${((Date.now()-start)/1000).toFixed(1)}s`);
           manager.destroy();
           manager = new KeyManager();
         }
@@ -212,4 +125,4 @@ app.post('/', (req, res) => {
   }
 });
 
-app.listen(port, () => console.log(`Service running on port ${port}`));
+app.listen(process.env.PORT || 3000, () => console.log('Service running'));
