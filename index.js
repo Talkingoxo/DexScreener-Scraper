@@ -156,7 +156,11 @@ app.get('/gate', (req, res) => {
   if (!tokenData) { res.status(410).end('Token expired or invalid'); return; }
   if (Date.now() - tokenData.created > 5000) { tokens.delete(token); res.status(410).end('Token expired'); return; }
   tokens.delete(token);
-  res.status(303).set('Location', tokenData.target).end();
+  res.set('Cache-Control', 'no-store');
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('Connection', 'close');
+  res.set('Content-Length', '0');
+  res.status(302).set('Location', tokenData.target).end();
 });
 
 app.post('/', (req, res) => {
