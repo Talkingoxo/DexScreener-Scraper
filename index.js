@@ -170,7 +170,6 @@ app.get('/gate', (req, res) => {
     return;
   }
   
-  tokens.delete(token);
   res.set('Cache-Control', 'no-store');
   res.set('Referrer-Policy', 'no-referrer');
   res.redirect(302, tokenData.target);
