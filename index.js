@@ -30,12 +30,15 @@ class KeyManager {
     const key = Object.keys(this.workers).find(k => !this.workers[k].busy);
     if (!key || !this.queue.length) return;
     
-    const task = this.queue.shift();
-    if (this.processing.has(task.id)) {this.queue.push(task); return;}
-    
-    this.processing.add(task.id);
-    this.workers[key].busy = true;
-    this.execute(key, task);
+    for (let i = 0; i < this.queue.length; i++) {
+      if (!this.processing.has(this.queue[i].id)) {
+        const task = this.queue.splice(i, 1)[0];
+        this.processing.add(task.id);
+        this.workers[key].busy = true;
+        this.execute(key, task);
+        return;
+      }
+    }
   }
   
   execute(key, task) {
