@@ -28,6 +28,7 @@ class KeyManager {
     this.globalQueue = [];
     this.workers = {};
     this.inFlight = new Set();
+    this.completedTasks = new Set();
     
     apiKeys.forEach(key => {
       const session = http2.connect('https://api.scrapingant.com');
@@ -67,28 +68,47 @@ class KeyManager {
     console.log(`REQUEST ${task.id}: Key=${key.slice(-8)}, Country=${countries[countryIndex]}${task.retries ? `, Retry=${task.retries}` : ''}`);
     
     let status = null;
-    let completed = false;
+    let isDone = false;
+    
+    const cleanup = () => {
+      isDone = true;
+      stream.removeAllListeners();
+      stream.close(http2.constants.NGHTTP2_CANCEL);
+      this.inFlight.delete(task.id);
+      this.workers[key].busy = false;
+    };
+    
+    const handleComplete = (finalStatus) => {
+      if (isDone || this.completedTasks.has(task.id)) return;
+      
+      this.completedTasks.add(task.id);
+      task.callback(finalStatus);
+    };
     
     const timeout = setTimeout(() => {
-      if (!completed) {
-        console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`);
-        stream.close(http2.constants.NGHTTP2_CANCEL);
-        this.inFlight.delete(task.id);
-        task.retries = (task.retries || 0) + 1;
-        task.originalCountry = task.originalCountry || task.id % 23;
-        
-        if (task.retries < 3) {
+      if (isDone) return;
+      
+      console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`);
+      cleanup();
+      
+      task.retries = (task.retries || 0) + 1;
+      task.originalCountry = task.originalCountry || task.id % 23;
+      
+      if (task.retries < 3) {
+        const jitter = 300 + Math.random() * 500;
+        setTimeout(() => {
           this.globalQueue.unshift(task);
-        } else {
-          task.callback(500);
-        }
-        
-        this.workers[key].busy = false;
-        this.processNext();
+          this.processNext();
+        }, jitter);
+      } else {
+        handleComplete(500);
       }
+      
+      this.processNext();
     }, 5000);
     
     stream.on('response', headers => {
+      if (isDone) return;
       status = headers[':status'];
       console.log(`RESPONSE ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
     });
@@ -96,27 +116,36 @@ class KeyManager {
     stream.on('data', () => {});
     
     stream.on('end', () => {
-      if (!completed) {
-        completed = true;
-        clearTimeout(timeout);
-        console.log(`COMPLETED ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
-        this.inFlight.delete(task.id);
-        task.callback(status);
-        this.workers[key].busy = false;
-        this.processNext();
+      if (isDone) return;
+      clearTimeout(timeout);
+      
+      console.log(`COMPLETED ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
+      
+      if (status === 409 && (!task.retries409 || task.retries409 < 1)) {
+        cleanup();
+        task.retries409 = (task.retries409 || 0) + 1;
+        
+        const jitter = 300 + Math.random() * 500;
+        setTimeout(() => {
+          this.globalQueue.unshift(task);
+          this.processNext();
+        }, jitter);
+      } else {
+        cleanup();
+        handleComplete(status);
       }
+      
+      this.processNext();
     });
     
     stream.on('error', err => {
-      if (!completed) {
-        completed = true;
-        clearTimeout(timeout);
-        console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`);
-        this.inFlight.delete(task.id);
-        task.callback(500);
-        this.workers[key].busy = false;
-        this.processNext();
-      }
+      if (isDone) return;
+      clearTimeout(timeout);
+      
+      console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`);
+      cleanup();
+      handleComplete(500);
+      this.processNext();
     });
     
     stream.write(`{"worker-id":${task.id}}`);
