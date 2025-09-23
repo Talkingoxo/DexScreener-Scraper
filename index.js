@@ -100,7 +100,6 @@ class KeyManager {
       if (this.hedging.has(task.id)) {clearTimeout(this.hedging.get(task.id)); this.hedging.delete(task.id);}
       stream.close();
       if (code >= 200 && code < 300 && !this.winners.includes(country)) this.winners.push(country);
-      tokens.delete(task.token);
       task.callback(code);
       this.process();
     };
@@ -121,7 +120,7 @@ class KeyManager {
       this.process();
     };
     
-    const timeout = setTimeout(() => {console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`); tokens.delete(task.token); retry();}, 5000);
+    const timeout = setTimeout(() => {console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`); retry();}, 5000);
     this.timeouts.push(timeout);
     
     const hedgeTimeout = setTimeout(() => {
