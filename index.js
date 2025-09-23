@@ -6,6 +6,8 @@ app.use(express.json());
 const apiKeys = ['00a5af9578784f0d9c96e4fccd458b4b','800b76f2e1bb4e8faea57d2add88601f','a180661526ac40eeaafe5d1a90d11b52','ae5ce549f49c4b17ab69b4e2f34fcc2e','cd8dfbb8ab4745eab854614cca70a5d8','34499358b9fd46a1a059cfd96d79db42','7992bcd991df4f639e8941c68186c7fc','fdd914f432d748889371e0307691c835','41f5cebd207042dd8a8acac2329ddb32','f6d87ae9284543e3b2d14f11a36e1dcd'];
 const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
 
+const tokens = new Map();
+
 class KeyManager {
   constructor() {
     this.queue = [];
@@ -98,6 +100,7 @@ class KeyManager {
       if (this.hedging.has(task.id)) {clearTimeout(this.hedging.get(task.id)); this.hedging.delete(task.id);}
       stream.close();
       if (code >= 200 && code < 300 && !this.winners.includes(country)) this.winners.push(country);
+      tokens.delete(task.token);
       task.callback(code);
       this.process();
     };
@@ -114,7 +117,7 @@ class KeyManager {
       this.process();
     };
     
-    const timeout = setTimeout(() => {console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`); retry();}, 5000);
+    const timeout = setTimeout(() => {console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`); tokens.delete(task.token); retry();}, 5000);
     this.timeouts.push(timeout);
     
     const hedgeTimeout = setTimeout(() => {
@@ -143,6 +146,29 @@ class KeyManager {
 
 let manager = new KeyManager();
 
+app.get('/gate', (req, res) => {
+  const {token, target} = req.query;
+  
+  if (!token || !target) {
+    res.status(400).end('Missing token or target');
+    return;
+  }
+  
+  const tokenData = tokens.get(token);
+  if (!tokenData) {
+    res.status(410).end('Token expired or invalid');
+    return;
+  }
+  
+  if (Date.now() - tokenData.created > 5000) {
+    tokens.delete(token);
+    res.status(410).end('Token expired');
+    return;
+  }
+  
+  res.redirect(302, target);
+});
+
 app.post('/', (req, res) => {
   res.end();
   const {url} = req.body;
@@ -158,9 +184,15 @@ app.post('/', (req, res) => {
   const start = Date.now();
   
   for (let i = 0; i < count; i++) {
+    const token = Date.now().toString(36) + Math.random().toString(36).substr(2);
+    tokens.set(token, {created: Date.now(), target: targetUrl});
+    
+    const gateUrl = `${req.protocol}://${req.get('host')}/gate?token=${token}&target=${encodeURIComponent(targetUrl)}`;
+    
     manager.add({
       id: i,
-      url: targetUrl,
+      url: gateUrl,
+      token: token,
       callback: (status) => {
         completed++;
         if (status >= 200 && status < 300) success++;
@@ -172,6 +204,12 @@ app.post('/', (req, res) => {
       }
     });
   }
+  
+  setTimeout(() => {
+    tokens.forEach((value, key) => {
+      if (Date.now() - value.created > 10000) tokens.delete(key);
+    });
+  }, 11000);
 });
 
 app.listen(process.env.PORT || 3000, () => console.log('Service running'));
