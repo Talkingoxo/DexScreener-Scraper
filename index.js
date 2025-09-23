@@ -19,11 +19,6 @@ class KeyManager {
     });
   }
   
-  add(task) {
-    this.queue.push(task);
-    this.process();
-  }
-  
   getSession(key) {
     const worker = this.workers[key];
     if (!worker.session || worker.session.destroyed || worker.session.closed) {
@@ -34,6 +29,13 @@ class KeyManager {
     }
     return worker.session;
   }
+  
+  add(task) {
+    this.queue.push(task);
+    this.process();
+  }
+  
+  process() {
     const key = Object.keys(this.workers).find(k => !this.workers[k].busy);
     if (!key || !this.queue.length) return;
     
