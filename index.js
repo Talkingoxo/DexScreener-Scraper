@@ -171,23 +171,23 @@ app.get('/gate', (req, res) => {
 
 app.post('/', (req, res) => {
   res.end();
-  const {url} = req.body;
+  const {url, target} = req.body;
   if (!url) return;
   
   const slashIndex = url.lastIndexOf('/');
   const count = +url.slice(slashIndex + 1) || 1;
-  const targetUrl = url.slice(0, slashIndex + 1);
+  const realTarget = target || url.slice(0, slashIndex + 1);
   
-  console.log(`STARTING: COUNT=${count}, TARGET=${targetUrl}`);
+  console.log(`STARTING: COUNT=${count}, TARGET=${realTarget}`);
   
   let completed = 0, success = 0;
   const start = Date.now();
   
   for (let i = 0; i < count; i++) {
     const token = Date.now().toString(36) + Math.random().toString(36).substr(2);
-    tokens.set(token, {created: Date.now(), target: targetUrl});
+    tokens.set(token, {created: Date.now(), target: realTarget});
     
-    const gateUrl = `${req.protocol}://${req.get('host')}/gate?token=${token}&target=${encodeURIComponent(targetUrl)}`;
+    const gateUrl = `${req.protocol}://${req.get('host')}/gate?token=${token}&target=${encodeURIComponent(realTarget)}`;
     
     manager.add({
       id: i,
