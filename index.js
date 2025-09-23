@@ -13,6 +13,8 @@ class KeyManager {
     this.processing = new Set();
     this.completed = new Set();
     this.timeouts = [];
+    this.winners = [];
+    this.hedging = new Map();
     
     apiKeys.forEach(key => {
       this.workers[key] = {session: null, busy: false};
@@ -50,13 +52,26 @@ class KeyManager {
     }
   }
   
+  selectCountry(task) {
+    if (task.retries) {
+      const tried = task.triedCountries || [];
+      const available = countries.filter(c => !tried.includes(c));
+      if (available.length === 0) return countries[Math.floor(Math.random() * countries.length)];
+      const winners = this.winners.filter(c => available.includes(c));
+      return winners.length > 0 ? winners[0] : available[0];
+    }
+    return countries[task.id % 23];
+  }
+  
   execute(key, task) {
-    const countryIndex = task.retries ? (task.id + task.retries) % 23 : task.id % 23;
+    const country = this.selectCountry(task);
+    task.triedCountries = task.triedCountries || [];
+    if (!task.triedCountries.includes(country)) task.triedCountries.push(country);
     
     let stream;
     try {
       const session = this.getSession(key);
-      stream = session.request({':method': 'POST', ':path': `/v2/general?url=${encodeURIComponent(task.url)}&x-api-key=${key}&proxy_country=${countries[countryIndex]}&proxy_type=datacenter&browser=false`, 'content-type': 'application/json'});
+      stream = session.request({':method': 'POST', ':path': `/v2/general?url=${encodeURIComponent(task.url)}&x-api-key=${key}&proxy_country=${country}&proxy_type=datacenter&browser=false`, 'content-type': 'application/json'});
     } catch (err) {
       if (err.code === 'ERR_HTTP2_INVALID_SESSION') {
         this.workers[key].session = null;
@@ -69,7 +84,7 @@ class KeyManager {
       throw err;
     }
     
-    console.log(`REQUEST ${task.id}: Key=${key.slice(-8)}, Country=${countries[countryIndex]}${task.retries ? `, Retry=${task.retries}` : ''}`);
+    console.log(`REQUEST ${task.id}: Key=${key.slice(-8)}, Country=${country}${task.retries ? `, Retry=${task.retries}` : ''}`);
     
     let status = null;
     let done = false;
@@ -80,7 +95,9 @@ class KeyManager {
       this.completed.add(task.id);
       this.processing.delete(task.id);
       this.workers[key].busy = false;
+      if (this.hedging.has(task.id)) {clearTimeout(this.hedging.get(task.id)); this.hedging.delete(task.id);}
       stream.close();
+      if (code >= 200 && code < 300 && !this.winners.includes(country)) this.winners.push(country);
       task.callback(code);
       this.process();
     };
@@ -92,21 +109,26 @@ class KeyManager {
       this.workers[key].busy = false;
       stream.close();
       task.retries = (task.retries || 0) + 1;
-      if (task.retries < 3) {
-        const timeout = setTimeout(() => {this.queue.push(task); this.process();}, 200 + Math.random() * 300);
-        this.timeouts.push(timeout);
-      } else {
-        finish(500);
-      }
+      const timeout = setTimeout(() => {this.queue.push(task); this.process();}, 200 + Math.random() * 300);
+      this.timeouts.push(timeout);
       this.process();
     };
     
-    const timeout = setTimeout(() => {console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`); retry();}, 8000);
+    const timeout = setTimeout(() => {console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`); retry();}, 5000);
     this.timeouts.push(timeout);
     
+    const hedgeTimeout = setTimeout(() => {
+      if (!done && !this.hedging.has(task.id)) {
+        this.hedging.set(task.id, true);
+        this.queue.unshift({...task, isHedge: true});
+        this.process();
+      }
+    }, 3000);
+    this.timeouts.push(hedgeTimeout);
+    
     stream.on('response', headers => {status = headers[':status']; console.log(`RESPONSE ${task.id}: Status=${status}, Key=${key.slice(-8)}`);});
-    stream.on('end', () => {clearTimeout(timeout); console.log(`COMPLETED ${task.id}: Status=${status}, Key=${key.slice(-8)}`); if (status === 409 && (!task.retries409 || task.retries409 < 1)) {task.retries409 = 1; retry();} else {finish(status);}});
-    stream.on('error', err => {clearTimeout(timeout); console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`); retry();});
+    stream.on('end', () => {clearTimeout(timeout); clearTimeout(hedgeTimeout); console.log(`COMPLETED ${task.id}: Status=${status}, Key=${key.slice(-8)}`); if (status >= 200 && status < 300) {finish(status);} else {retry();}});
+    stream.on('error', err => {clearTimeout(timeout); clearTimeout(hedgeTimeout); console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`); retry();});
     stream.on('data', () => {});
     
     stream.write(`{"worker-id":${task.id}}`);
