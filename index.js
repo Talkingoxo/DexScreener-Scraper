@@ -155,17 +155,13 @@ app.get('/gate', (req, res) => {
   const ua = req.get('user-agent') || '-';
   const now = Date.now();
   res.set('Cache-Control', 'no-store');
-  res.set('Referrer-Policy', 'no-referrer');
-  res.set('Connection', 'close');
-  if (!token) { console.log(`GATE_400 ip=${ip} ua=${ua}`); res.status(400).end('Missing token'); return; }
+  res.set('Referrer-Policy', 'no-referrer');  if (!token) { console.log(`GATE_400 ip=${ip} ua=${ua}`); res.status(400).end('Missing token'); return; }
   const tokenData = tokens.get(token);
   if (!tokenData) { console.log(`GATE_410 invalid ip=${ip} ua=${ua}`); res.status(410).end('Token expired or invalid'); return; }
   const age = now - tokenData.created;
   if (age > 5000) { tokens.delete(token); console.log(`GATE_410 expired age=${age}`); res.status(410).end('Token expired'); return; }
   tokens.delete(token);
-  console.log(`GATE_302 age=${age} target=${tokenData.target}`);
-  res.set('Content-Length', '0');
-  res.status(302).set('Location', tokenData.target).end();
+  console.log(`GATE_302 age=${age} target=${tokenData.target}`);  res.redirect(302, tokenData.target);
 });
 
 app.post('/', (req, res) => {
