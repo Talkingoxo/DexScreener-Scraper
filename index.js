@@ -48,6 +48,8 @@ class KeyManager {
       }
     }
   }
+    }
+  }
   selectCountry(task) {
     if (task.retries) {
       const tried = task.triedCountries || [];
@@ -92,8 +94,8 @@ class KeyManager {
       this.completed.add(task.id);
       this.processing.delete(task.id);
       this.workers[key].busy = false;
-      if (this.hedging.has(task.id)) { clearTimeout(this.hedging.get(task.id)); this.hedging.delete(task.id); }
-      stream.close();
+      if (this.hedging.has(task.id)) { try { clearTimeout(this.hedging.get(task.id)); } catch (e) {} this.hedging.delete(task.id); }
+      try { if (stream) stream.close(); } catch (e) {}
       if (code >= 200 && code < 400 && !this.winners.includes(country)) this.winners.push(country);
       task.callback(code);
       this.process();
@@ -198,5 +200,10 @@ app.post('/', (req, res) => {
     tokens.forEach((value, key) => { if (Date.now() - value.created > 10000) tokens.delete(key); });
   }, 11000);
 });
+
+app.get('/', (req, res) => res.status(200).send('ok'));
+
+process.on('uncaughtException', (err) => { console.error('uncaughtException', err && err.stack || err); });
+process.on('unhandledRejection', (err) => { console.error('unhandledRejection', err && err.stack || err); });
 
 app.listen(process.env.PORT || 3000, () => console.log('Service running'));
