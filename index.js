@@ -97,8 +97,9 @@ class KeyManager {
     let stream;
     try {
       const session = this.getSession(key);
-      const path = `/v2/general?url=${encodeURIComponent(task.url)}&x-api-key=${key}&proxy_country=${country}&proxy_type=datacenter&browser=false`;
-      console.log(`[HTTP2 REQUEST] Task ${task.id}: POST ${path.slice(0,50)}...`);
+      // CHANGED: Added browser=true to make ScrapingAnt follow redirects
+      const path = `/v2/general?url=${encodeURIComponent(task.url)}&x-api-key=${key}&proxy_country=${country}&proxy_type=datacenter&browser=true&return_page_source=true`;
+      console.log(`[HTTP2 REQUEST] Task ${task.id}: POST ${path.slice(0,50)}... [BROWSER=TRUE ADDED]`);
       stream = session.request({':method': 'POST', ':path': path, 'content-type': 'application/json'});
     } catch (err) {
       console.log(`[HTTP2 ERROR] Task ${task.id}: ${err.code} - ${err.message}`);
@@ -115,7 +116,7 @@ class KeyManager {
       throw err;
     }
     
-    console.log(`REQUEST ${task.id}: Key=${key.slice(-8)}, Country=${country}${task.retries ? `, Retry=${task.retries}` : ''}`);
+    console.log(`REQUEST ${task.id}: Key=${key.slice(-8)}, Country=${country}${task.retries ? `, Retry=${task.retries}` : ''} [BROWSER MODE]`);
     
     let status = null;
     let done = false;
@@ -141,8 +142,8 @@ class KeyManager {
         console.log(`[WINNER] Adding country ${country} to winners`);
         this.winners.push(country);
       }
-      console.log(`[TOKEN DELETE WARNING] Task ${task.id}: WOULD delete token ${task.token} but SKIPPED for debugging`);
-      // tokens.delete(task.token); // REMOVED FOR DEBUGGING
+      console.log(`[TOKEN STATUS] Task ${task.id}: NOT deleting token ${task.token} - let it expire naturally`);
+      // DO NOT DELETE TOKEN - let gate handle expiry
       console.log(`[CALLBACK] Task ${task.id}: calling callback with status ${code}`);
       task.callback(code);
       this.process();
@@ -174,8 +175,9 @@ class KeyManager {
     
     const timeout = setTimeout(() => {
       console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)}`);
-      console.log(`[TIMEOUT DELETE WARNING] Task ${task.id}: WOULD delete token ${task.token} but SKIPPED for debugging`);
-      // tokens.delete(task.token); // REMOVED FOR DEBUGGING
+      console.log(`[TIMEOUT] Task ${task.id}: NOT deleting token - marking as timed out`);
+      const tokenData = tokens.get(task.token);
+      if (tokenData) tokenData.timedOut = true;
       retry();
     }, 5000);
     this.timeouts.push(timeout);
@@ -193,7 +195,7 @@ class KeyManager {
     stream.on('response', headers => {
       status = headers[':status'];
       console.log(`RESPONSE ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
-      console.log(`[HEADERS] Task ${task.id}: ${JSON.stringify(headers)}`);
+      console.log(`[HEADERS] Task ${task.id}: page-status=${headers['ant-page-status-code']}, credits=${headers['ant-credits-cost']}`);
     });
     
     stream.on('end', () => {
@@ -219,7 +221,10 @@ class KeyManager {
     
     stream.on('data', chunk => {
       dataReceived += chunk.length;
-      console.log(`[DATA] Task ${task.id}: received ${chunk.length} bytes, total=${dataReceived}`);
+      if (dataReceived <= 500) {
+        const preview = chunk.toString().slice(0, 100);
+        console.log(`[DATA PREVIEW] Task ${task.id}: ${preview}...`);
+      }
     });
     
     const payload = `{"worker-id":${task.id}}`;
@@ -242,6 +247,7 @@ class KeyManager {
 
 let manager = new KeyManager();
 
+// CHANGED: Gate now returns meta refresh HTML instead of 302 redirect
 app.get('/gate', (req, res) => {
   const accessId = ++gateAccessCounter;
   const {token} = req.query;
@@ -268,25 +274,26 @@ app.get('/gate', (req, res) => {
   const age = Date.now() - tokenData.created;
   console.log(`[GATE #${accessId}] Token age=${age}ms, limit=5000ms`);
   
-  if (age > 5000) {
-    console.log(`[GATE #${accessId}] TOKEN EXPIRED - deleting and returning 410`);
+  if (age > 5000 || tokenData.timedOut) {
+    console.log(`[GATE #${accessId}] TOKEN EXPIRED/TIMED OUT - deleting and returning 410`);
     tokens.delete(token);
     console.log(`[GATE #${accessId}] Tokens remaining=${tokens.size}`);
     res.status(410).end('Token expired');
     return;
   }
   
-  console.log(`[GATE #${accessId}] TOKEN VALID - redirecting to ${tokenData.target}`);
+  console.log(`[GATE #${accessId}] TOKEN VALID - sending META REFRESH to ${tokenData.target}`);
   console.log(`[GATE #${accessId}] NOT DELETING TOKEN - keeping for full 5s window`);
   
   tokenData.accesses = (tokenData.accesses || 0) + 1;
   tokenData.lastAccess = Date.now();
   console.log(`[GATE #${accessId}] Token accesses=${tokenData.accesses}, last=${tokenData.lastAccess}`);
   
+  // CHANGED: Return HTML with meta refresh instead of 302
+  res.set('Content-Type', 'text/html');
   res.set('Cache-Control', 'no-store');
-  res.set('Referrer-Policy', 'no-referrer');
-  res.redirect(302, tokenData.target);
-  console.log(`[GATE #${accessId}] 302 REDIRECT sent\n`);
+  res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=${tokenData.target}"><title>Redirecting...</title></head><body>Redirecting...</body></html>`);
+  console.log(`[GATE #${accessId}] META REFRESH HTML sent\n`);
 });
 
 app.post('/', (req, res) => {
@@ -304,6 +311,7 @@ app.post('/', (req, res) => {
   console.log(`\n[============ NEW BATCH ============]`);
   console.log(`STARTING: COUNT=${count}, TARGET=${realTarget}`);
   console.log(`[TOKENS BEFORE] Map size=${tokens.size}`);
+  console.log(`[STRATEGY] Using browser=true for redirect following`);
   
   let completed = 0, success = 0;
   const start = Date.now();
@@ -313,7 +321,7 @@ app.post('/', (req, res) => {
     const token = Date.now().toString(36) + Math.random().toString(36).substr(2);
     const tokenData = {created: Date.now(), target: realTarget, id: tokenId};
     tokens.set(token, tokenData);
-    console.log(`[TOKEN CREATE #${tokenId}] token=${token}, data=${JSON.stringify(tokenData)}`);
+    console.log(`[TOKEN CREATE #${tokenId}] token=${token}, target=${realTarget}`);
     
     const gateUrl = `${req.protocol}://${req.get('host')}/gate?token=${token}`;
     console.log(`[GATE URL ${i}] ${gateUrl}`);
@@ -330,6 +338,9 @@ app.post('/', (req, res) => {
           console.log(`\n[============ BATCH COMPLETE ============]`);
           console.log(`FINISHED: ${success}/${count} success (${(success/count*100).toFixed(1)}%) in ${((Date.now()-start)/1000).toFixed(1)}s`);
           console.log(`[TOKENS AFTER] Map size=${tokens.size}`);
+          tokens.forEach((v,k) => {
+            console.log(`[TOKEN REMAINING] ${k}: age=${Date.now()-v.created}ms, accesses=${v.accesses||0}`);
+          });
           console.log(`[CLEANUP] Destroying manager`);
           manager.destroy();
           manager = new KeyManager();
@@ -343,6 +354,7 @@ app.post('/', (req, res) => {
     let deleted = 0;
     tokens.forEach((value, key) => {
       if (Date.now() - value.created > 10000) {
+        console.log(`[CLEANUP DELETE] Token ${key}: age=${Date.now()-value.created}ms`);
         tokens.delete(key);
         deleted++;
       }
@@ -351,4 +363,4 @@ app.post('/', (req, res) => {
   }, 11000);
 });
 
-app.listen(process.env.PORT || 3000, () => console.log('Service running - ULTRA DEBUG MODE'));
+app.listen(process.env.PORT || 3000, () => console.log('Service running - ULTRA DEBUG MODE with BROWSER=TRUE'));
