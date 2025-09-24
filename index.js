@@ -123,17 +123,19 @@ class KeyManager {
     stream.on('response', headers => {
       status = headers[':status'];
       pageStatus = parseInt(headers['ant-page-status-code'] || headers['ant-page-status'] || '0', 10) || null;
-      console.log(`RESPONSE ${task.id}: Status=${status}, Key=${key.slice(-8)}`);
+      console.log(`ANT_RESP id=${task.id} key=${key.slice(-8)} wrap=${status} page=${pageStatus}`);
+    });
     });
     stream.on('end', () => {
       clearTimeout(timeout);
       clearTimeout(hedgeTimeout);
       const code = pageStatus || status || 0;
-      console.log(`COMPLETED ${task.id}: Status=${code}, Key=${key.slice(-8)}`);
+      console.log(`ANT_END id=${task.id} key=${key.slice(-8)} code=${code} bytes=${bytes}`);
       if (code >= 200 && code < 400) { finish(code); } else { retry(); }
     });
     stream.on('error', err => { clearTimeout(timeout); clearTimeout(hedgeTimeout); console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`); retry(); });
-    stream.on('data', () => {});
+    let bytes = 0;
+    stream.on('data', chunk => { bytes += chunk.length; });
     if (!task.createdAt) task.createdAt = Date.now();
     stream.write(`{"worker-id":${task.id}}`);
     stream.end();
@@ -148,17 +150,20 @@ class KeyManager {
 let manager = new KeyManager();
 
 app.get('/gate', (req, res) => {
-  const { token } = req.query;
-  res.set('Cache-Control', 'no-store');
-  res.set('Referrer-Policy', 'no-referrer');
-  if (!token) { res.status(400).end('Missing token'); return; }
-  const tokenData = tokens.get(token);
-  if (!tokenData) { res.status(410).end('Token expired or invalid'); return; }
-  if (Date.now() - tokenData.created > 5000) { tokens.delete(token); res.status(410).end('Token expired'); return; }
-  tokens.delete(token);
+  const token = req.query.token;
+  const ip = req.headers['cf-connecting-ip'] || req.ip || '-';
+  const ua = req.get('user-agent') || '-';
+  const now = Date.now();
   res.set('Cache-Control', 'no-store');
   res.set('Referrer-Policy', 'no-referrer');
   res.set('Connection', 'close');
+  if (!token) { console.log(`GATE_400 ip=${ip} ua=${ua}`); res.status(400).end('Missing token'); return; }
+  const tokenData = tokens.get(token);
+  if (!tokenData) { console.log(`GATE_410 invalid ip=${ip} ua=${ua}`); res.status(410).end('Token expired or invalid'); return; }
+  const age = now - tokenData.created;
+  if (age > 5000) { tokens.delete(token); console.log(`GATE_410 expired age=${age}`); res.status(410).end('Token expired'); return; }
+  tokens.delete(token);
+  console.log(`GATE_302 age=${age} target=${tokenData.target}`);
   res.set('Content-Length', '0');
   res.status(302).set('Location', tokenData.target).end();
 });
