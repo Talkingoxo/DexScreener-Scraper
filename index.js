@@ -47,9 +47,6 @@ class KeyManager {
         return;
       }
     }
-  }
-    }
-  }
   selectCountry(task) {
     if (task.retries) {
       const tried = task.triedCountries || [];
@@ -88,6 +85,7 @@ class KeyManager {
     let status = null;
     let pageStatus = null;
     let done = false;
+    let bytes = 0;
     const finish = (code) => {
       if (done || this.completed.has(task.id)) return;
       done = true;
@@ -127,7 +125,6 @@ class KeyManager {
       pageStatus = parseInt(headers['ant-page-status-code'] || headers['ant-page-status'] || '0', 10) || null;
       console.log(`ANT_RESP id=${task.id} key=${key.slice(-8)} wrap=${status} page=${pageStatus}`);
     });
-    });
     stream.on('end', () => {
       clearTimeout(timeout);
       clearTimeout(hedgeTimeout);
@@ -136,7 +133,6 @@ class KeyManager {
       if (code >= 200 && code < 400) { finish(code); } else { retry(); }
     });
     stream.on('error', err => { clearTimeout(timeout); clearTimeout(hedgeTimeout); console.log(`ERROR ${task.id}: ${err.message}, Key=${key.slice(-8)}`); retry(); });
-    let bytes = 0;
     stream.on('data', chunk => { bytes += chunk.length; });
     if (!task.createdAt) task.createdAt = Date.now();
     stream.write(`{"worker-id":${task.id}}`);
