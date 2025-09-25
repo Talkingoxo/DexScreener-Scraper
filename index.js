@@ -6,6 +6,9 @@ app.use((req, res, next) => {
   req.ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.socket.remoteAddress;
   next();
 });
+app.enable('trust proxy');
+
+const GATE_TTL_MS = 20000;
 
 const apiKeys = ['00a5af9578784f0d9c96e4fccd458b4b','800b76f2e1bb4e8faea57d2add88601f','a180661526ac40eeaafe5d1a90d11b52','ae5ce549f49c4b17ab69b4e2f34fcc2e','cd8dfbb8ab4745eab854614cca70a5d8','34499358b9fd46a1a059cfd96d79db42','7992bcd991df4f639e8941c68186c7fc','fdd914f432d748889371e0307691c835','41f5cebd207042dd8a8acac2329ddb32','f6d87ae9284543e3b2d14f11a36e1dcd'];
 const countries = ['BR','CA','CN','CZ','FR','DE','HK','IN','ID','IT','IL','JP','NL','PL','RU','SA','SG','KR','ES','GB','AE','US','VN'];
@@ -160,7 +163,6 @@ class KeyManager {
       }
       const tokenExists = tokens.has(task.token);
       console.log(`[TOKEN-CLEANUP] Task ${task.id} token exists before cleanup: ${tokenExists}`);
-      if (tokenExists) tokens.delete(task.token);
       task.callback(code);
       console.log(`[STATS] Processing: ${this.processing.size}, Queue: ${this.queue.length}, Completed: ${this.completed.size}`);
       this.process();
@@ -192,11 +194,10 @@ class KeyManager {
     };
     
     const timeout = setTimeout(() => {
-      console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)} after 5 seconds`);
-      console.log(`[TIMEOUT-TOKEN] Task ${task.id} deleting token due to timeout`);
-      tokens.delete(task.token); 
+      console.log(`TIMEOUT ${task.id}: Key=${key.slice(-8)} after 20 seconds`);
+      console.log(`[TIMEOUT-INFO] Task ${task.id} timed out, but keeping token for gate`);
       retry();
-    }, 5000);
+    }, GATE_TTL_MS);
     this.timeouts.push(timeout);
     
     const hedgeTimeout = setTimeout(() => {
@@ -260,11 +261,11 @@ class KeyManager {
 
 let manager = new KeyManager();
 
-app.get('/gate', (req, res) => {
+app.all('/gate', (req, res) => {
   const {token} = req.query;
   const clientIP = req.ip || req.connection.remoteAddress;
   
-  console.log(`[GATE] Request from ${clientIP} with token: ${token ? token.substring(0, 10) + '...' : 'MISSING'}`);
+  console.log(`[GATE] ${req.method} ${req.protocol}://${req.get('host')}${req.originalUrl} from ${clientIP}`);
   
   if (!token) {
     console.log(`[GATE-ERROR] Missing token from ${clientIP}`);
@@ -282,9 +283,9 @@ app.get('/gate', (req, res) => {
   }
   
   const age = Date.now() - tokenData.created;
-  console.log(`[GATE-AGE] Token age: ${age}ms (limit: 5000ms)`);
+  console.log(`[GATE-AGE] Token age: ${age}ms (limit: ${GATE_TTL_MS}ms)`);
   
-  if (age > 5000) {
+  if (age > GATE_TTL_MS) {
     tokens.delete(token);
     console.log(`[GATE-EXPIRED] Token too old (${age}ms), deleted`);
     res.status(410).end('Token expired');
@@ -316,6 +317,7 @@ app.post('/', (req, res) => {
   
   console.log(`STARTING: COUNT=${count}, TARGET=${realTarget}`);
   console.log(`[TOKENS] Current token count: ${tokens.size}`);
+  console.log(`[ENV] building gate for host=${req.get('host')}`);
   
   let completed = 0, success = 0;
   const start = Date.now();
