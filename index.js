@@ -324,7 +324,7 @@ app.post('/', (req, res) => {
     const token = Date.now().toString(36) + Math.random().toString(36).substr(2);
     tokens.set(token, {created: Date.now(), target: realTarget});
     
-    const gateUrl = `${req.protocol}://${req.get('host')}/gate?token=${token}`;
+    const gateUrl = `https://${req.get('host')}/gate?token=${token}`;
     console.log(`[GATE-URL] Task ${i}: ${gateUrl}`);
     
     manager.add({
