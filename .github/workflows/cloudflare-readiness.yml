@@ -1,0 +1,96 @@
+name: Cloudflare readiness
+
+on:
+  pull_request:
+    paths:
+      - wrangler.toml
+      - wrangler.json
+      - wrangler.jsonc
+      - package.json
+      - src/**
+      - .github/workflows/cloudflare-readiness.yml
+  push:
+    paths:
+      - wrangler.toml
+      - wrangler.json
+      - wrangler.jsonc
+      - package.json
+      - src/**
+      - .github/workflows/cloudflare-readiness.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Wrangler configuration
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in wrangler.jsonc wrangler.json wrangler.toml; do
+            if [[ -f "$file" ]]; then
+              echo "path=$file" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "path=" >> "$GITHUB_OUTPUT"
+          echo "No Wrangler configuration found. Cloudflare Workers Builds can run automatic configuration when this repository is connected."
+
+      - name: Validate Wrangler metadata
+        if: steps.config.outputs.path != ''
+        env:
+          CONFIG_PATH: ${{ steps.config.outputs.path }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import datetime as dt
+          import os
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path(os.environ['CONFIG_PATH'])
+          text = path.read_text(encoding='utf-8')
+
+          def field(name):
+              pattern = rf'["\']?{re.escape(name)}["\']?\s*[:=]\s*["\']([^"\']+)["\']'
+              match = re.search(pattern, text)
+              return match.group(1).strip() if match else None
+
+          compatibility_date = field('compatibility_date')
+          if not compatibility_date:
+              sys.exit(f'{path}: missing compatibility_date')
+
+          try:
+              configured = dt.date.fromisoformat(compatibility_date)
+          except ValueError:
+              sys.exit(f'{path}: invalid compatibility_date {compatibility_date!r}')
+
+          today_utc = dt.datetime.now(dt.timezone.utc).date()
+          if configured > today_utc:
+              sys.exit(
+                  f'{path}: compatibility_date {configured} is in the future in UTC; '
+                  f'latest allowed date is {today_utc}'
+              )
+
+          name = field('name')
+          if name and not re.fullmatch(r'[A-Za-z0-9-]{1,255}', name):
+              sys.exit(f'{path}: invalid Worker name {name!r}; use letters, numbers, and dashes only')
+
+          main = field('main')
+          if main and not pathlib.Path(main).exists():
+              sys.exit(f'{path}: configured entrypoint does not exist: {main}')
+
+          print(f'Validated {path}: compatibility_date={configured}, name={name}, main={main}')
+          PY
+
+      - name: Compile Worker without deploying
+        if: steps.config.outputs.path != ''
+        run: npx --yes wrangler@latest deploy --dry-run --outdir .wrangler-dry-run
